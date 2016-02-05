@@ -3,13 +3,12 @@ import keras
 from keras.models import Sequential
 from keras.layers.core import Dense, Activation, Dropout
 from keras.layers.recurrent import LSTM
-from keras.datasets.data_utils import get_file
 import numpy as np
-import random
-import sys
 
-states = ('open', 'moved', 'closed')
-n_desc = 12
+# time_delta, target_domain_id, target_path_id, referer_domain_id, referer_path_id, prev_domain_id, prev_path_id
+
+states = ('open', 'moved', 'not-mine', 'closed')
+n_desc = 7
 max_t = 20
 
 model = Sequential()
@@ -22,10 +21,15 @@ model.add(Activation('softmax'))
 
 model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
 
+### Feature structure
+
+
 
 def main():
     X = np.ones((1, max_t, n_desc))
-    print X
+    Y = np.ones((1, 1))
+    print model.predict(X, 128)
+    model.fit(X, Y)
     print model.predict(X, 128)
 
 
