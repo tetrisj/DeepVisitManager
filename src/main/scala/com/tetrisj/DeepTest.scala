@@ -3,6 +3,7 @@ package com.tetrisj
 import com.tetrisj.Data.RawUserEvents
 import org.apache.hadoop.io.Text
 import org.apache.spark.sql.SQLContext
+import org.apache.spark.sql.functions.{explode, monotonicallyIncreasingId,array}
 import org.apache.spark.{SparkConf, SparkContext}
 
 
@@ -67,34 +68,68 @@ object DeepTest {
 
 
   def main(args: Array[String]): Unit = {
+
     System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
     val conf = new SparkConf()
     implicit val sc = new SparkContext(conf)
     implicit val sqlContext = new SQLContext(sc)
+    import sqlContext.implicits._
 
 
 //    val combined = combineVistsAndEvents()
 //    combined.write.parquet(outputRoot + "/combinedParquet")
 
 
+
+
     val combined = sqlContext.read.parquet(outputRoot + "/combinedParquet")
     combined.registerTempTable("combined")
     combined.printSchema()
-    combined.as[Data.CombinedVisit].take(5).foreach(println)
+
+
+    val exploded = combined.
+      withColumn("visitId",monotonicallyIncreasingId).
+      withColumn("event", explode($"events")).
+      select("visitId","userId","event","timestamps")
+      .withColumn("timestamp", explode($"timestamps"))
+      .select("visitId","userId","event","timestamp")
+
+    exploded.printSchema()
+    exploded.registerTempTable("exploded")
+    val visitEvents = sqlContext.sql("select *, abs(timestamp/1000.0-event.event.timestamp)<0.1 label from exploded")
+    visitEvents.limit(1000000).write.option("mapred.output.compress","true").json(outputRoot + "/labeledJson")
 
 
 
 
-    //    val visits = sqlContext.read.json(visitsPath)
-    //    visits.printSchema()
-    //    visits.registerTempTable("visits")
-    //
-    //    val combined = visits.filter(visits("site").endsWith("*"))
-    //      .join(events, events("userId") === visits("user"))
-    //    val json = combined.toJSON
-    //    json.take(10).foreach(println)
-    //    delete
-    //    json.saveAsTextFile(outputRoot + "/combined")
+
+
+
+
+//    case class Employee(firstName: String, lastName: String, email: String)
+//    case class Department(id: String, name: String)
+//    case class DepartmentWithEmployees(department: Department, employees: Seq[Employee])
+//
+//    val employee1 = new Employee("michael", "armbrust", "abc123@prodigy.net")
+//    val employee2 = new Employee("chris", "fregly", "def456@compuserve.net")
+//
+//    val department1 = new Department("123456", "Engineering")
+//    val department2 = new Department("123456", "Psychology")
+//    val departmentWithEmployees1 = new DepartmentWithEmployees(department1, Seq(employee1, employee2))
+//    val departmentWithEmployees2 = new DepartmentWithEmployees(department2, Seq(employee1, employee2))
+//
+//    val departmentWithEmployeesRDD = sc.parallelize(Seq(departmentWithEmployees1, departmentWithEmployees2))
+//    departmentWithEmployeesRDD.toDF().saveAsParquetFile("dwe.parquet")
+//
+//    val departmentWithEmployeesDF = sqlContext.parquetFile("dwe.parquet")
+//
+//    // This would be replaced by explodeArray()
+//    val explodedDepartmentWithEmployeesDF = departmentWithEmployeesDF.explode(departmentWithEmployeesDF("employees")) {
+//      case Row(employee: Seq[Row]) => employee.map(employee =>
+//        Employee(employee(0).asInstanceOf[String], employee(1).asInstanceOf[String], employee(2).asInstanceOf[String])
+//      )
+//    }
+
   }
 }

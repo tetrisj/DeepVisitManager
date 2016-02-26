@@ -25,41 +25,4 @@ object Data {
   }
 
   case class UserEvents(userId: String, events: List[EventWithFeatures])
-  case class CombinedVisit(sendingpage: String, landingpage:String, userId: String, timestamps: Array[Int], events:Array[EventWithFeatures])
-
-//  root
-//  |-- _corrupt_record: string (nullable = true)
-//  |-- appsource: array (nullable = true)
-//  |    |-- element: string (containsNull = true)
-//  |-- country: long (nullable = true)
-//  |-- issitereferral: boolean (nullable = true)
-//  |-- keywords: string (nullable = true)
-//  |-- landingpage: string (nullable = true)
-//  |-- numpageviews: long (nullable = true)
-//  |-- pages: array (nullable = true)
-//  |    |-- element: string (containsNull = true)
-//  |-- reftype: string (nullable = true)
-//  |-- region: string (nullable = true)
-//  |-- sendingpage: string (nullable = true)
-//  |-- site: string (nullable = true)
-//  |-- site2: string (nullable = true)
-//  |-- source: string (nullable = true)
-//  |-- specialref: long (nullable = true)
-//  |-- timeonsite: double (nullable = true)
-//  |-- timestamps: array (nullable = true)
-//  |    |-- element: long (containsNull = true)
-//  |-- user: string (nullable = true)
-//  |-- userId: string (nullable = true)
-//  |-- events: array (nullable = true)
-//  |    |-- element: struct (containsNull = true)
-//  |    |    |-- event: struct (nullable = true)
-//  |    |    |    |-- timestamp: double (nullable = false)
-//  |    |    |    |-- requestUrl: string (nullable = true)
-//  |    |    |    |-- referrerUrl: string (nullable = true)
-//  |    |    |    |-- prevUrl: string (nullable = true)
-//  |    |    |-- feature: map (nullable = true)
-//  |    |    |    |-- key: integer
-//  |    |    |    |-- value: double (valueContainsNull = false)
-
-
 }
