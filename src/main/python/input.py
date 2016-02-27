@@ -2,13 +2,24 @@ import numpy as np
 import os
 import simplejson
 import itertools
+from scipy import sparse
+from pprint import pprint
+
 
 def parse_event(s):
     data = simplejson.loads(s)
-    feature = data['event']['feature']
+    start_time = data['startTime']
+    feature_dict = {(0,int(k)): v for k, v in data['event']['feature'].items()}
+    max_dim = max(feature_dict.keys())[1]+1
+
+    feature_dict[(0, max_dim-1)] -= start_time  # Adjust timestamp feature to be relative
+
+    features = sparse.dok_matrix((1, max_dim))
+    features.update(feature_dict)
     label = 1 if data['label'] else 0
     visit_id = data['visitId']
-    return feature, label, visit_id
+
+    return features, label, visit_id
 
 
 def grouper(n, iterable):
@@ -31,8 +42,11 @@ def event_data(root_path):
         for line in file(file_path, 'rb'):
             feature, label, visit_id = parse_event(line)
             if current_visit != visit_id and current_visit:
-                yield features,labels
-            features.append(feature)
+                yield sparse.vstack(features), np.array(labels)
+
+                features = []
+                labels = []
+            features.append(feature.tocsr())
             labels.append(label)
             current_visit = visit_id
 
@@ -41,8 +55,9 @@ def main():
     input = event_data(r'/home/jenia/Deep/labeledJson')
     # for i in grouper(16,input).next():
     #     print i
-    from pprint import pprint
-    x = grouper(8,input).next()
+
+    x = grouper(8, input).next()
+    pprint(x)
 
 
 if __name__ == '__main__':

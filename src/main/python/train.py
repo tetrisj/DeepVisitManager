@@ -9,7 +9,7 @@ import numpy as np
 from input import event_data
 
 states = ('open', 'moved', 'not-mine', 'closed')
-n_desc = 4
+n_desc = 340510
 max_t = 20
 
 model = Sequential()
@@ -28,12 +28,12 @@ model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
 
 
 def main():
+    #Need to run  sudo ldconfig /usr/local/cuda-7.5/lib64 before for some reason
     for X, Y in event_data(r'C:\Projects\Deep\combined'):
-        print X[:max_t].reshape((1, max_t, n_desc))
-        print Y[:max_t].reshape(1, max_t)
-        print X,Y
-        model.fit(X, Y)
-        print model.predict(X, 128)
+        print X.shape()
+        print Y.shape()
+        #model.fit(X, Y)
+        #print model.predict(X, 128)
 
 
 if __name__ == '__main__':
