@@ -3,7 +3,7 @@ package com.tetrisj
 import com.tetrisj.Data.RawUserEvents
 import org.apache.hadoop.io.Text
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.functions.{explode, monotonicallyIncreasingId, min}
+import org.apache.spark.sql.functions.{explode, monotonicallyIncreasingId}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.functions.udf
 
@@ -100,9 +100,9 @@ object PrepareData {
       .select("startTime", "visitId", "userId", "events", "timestamps")
       .withColumn("event", explode($"events"))
       .where("event.event.timestamp > startTime - 0.01")
-      .select("visitId", "event", "timestamps")
+      .select("startTime","visitId", "event", "timestamps")
       .withColumn("timestamp", explode($"timestamps"))
-      .select("visitId", "event", "timestamp")
+      .select("startTime", "visitId", "event", "timestamp")
 
     exploded.printSchema()
     exploded.registerTempTable("exploded")

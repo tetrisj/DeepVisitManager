@@ -9,8 +9,8 @@ import numpy as np
 from input import event_data
 
 states = ('open', 'moved', 'not-mine', 'closed')
-n_desc = 340510
-max_t = 20
+n_desc = 14725
+max_t = 5
 
 model = Sequential()
 model.add(LSTM(512, return_sequences=True, input_shape=(max_t, n_desc)))
