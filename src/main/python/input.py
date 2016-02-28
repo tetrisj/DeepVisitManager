@@ -9,16 +9,15 @@ from pprint import pprint
 def parse_event(s):
     data = simplejson.loads(s)
 
-    feature_dict = {(0,int(k)): v for k, v in data['event']['feature'].items()}
-    max_dim = max(feature_dict.keys())[1]+1
-    print max_dim
+    feature_dict = {(0, int(k)): v for k, v in data['event']['feature'].items()}
+    max_dim = max(feature_dict.keys())[1] + 1
 
     start_time = data['startTime']
-    feature_dict[(0, max_dim-1)] -= start_time  # Adjust timestamp feature to be relative
+    feature_dict[(0, max_dim - 1)] -= start_time  # Adjust timestamp feature to be relative
 
     features = sparse.dok_matrix((1, max_dim))
     features.update(feature_dict)
-    label = 1 if data['label'] else 0
+    label = [1, 0] if data['label'] else [0, 1]
     visit_id = data['visitId']
 
     return features, label, visit_id
@@ -38,12 +37,12 @@ def event_data(root_path):
         if 'part' not in filename or 'crc' in filename:
             continue
         file_path = os.path.join(root_path, filename)
-        print file_path
+
         current_visit = ''
         features = []
         labels = []
         for line in file(file_path, 'rb'):
-            print line
+
             feature, label, visit_id = parse_event(line)
             if current_visit != visit_id and current_visit:
                 yield sparse.vstack(features), np.array(labels)
