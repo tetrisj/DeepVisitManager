@@ -125,6 +125,11 @@
             <artifactId>httpclient</artifactId>
             <version>4.5.1</version>
         </dependency>
+        <dependency>
+            <groupId>com.databricks</groupId>
+            <artifactId>spark-avro_2.11</artifactId>
+            <version>2.0.1</version>
+        </dependency>
         <!-- Guava is excluded because of SPARK-6149.  The Guava version referenced in this module is
              15.0, which causes runtime incompatibility issues. -->
         <dependency>

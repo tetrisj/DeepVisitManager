@@ -45,7 +45,8 @@ def event_data(root_path):
 
             feature, label, visit_id = parse_event(line)
             if current_visit != visit_id and current_visit:
-                yield sparse.vstack(features), np.array(labels)
+                # FIXME: This is only a simple test. Need to construct actual state machine samples
+                yield sparse.vstack(features[:5]), np.array(labels[:5])
 
                 features = []
                 labels = []

@@ -15,8 +15,10 @@ object PrepareData {
   val eventsPath = "/home/jenia/Deep/events/"
   val visitsPath = "/home/jenia/Deep/visits/"
   val outputRoot = "/home/jenia/Deep"
-  val minParamCount = 1000
-  val minDomainCount = 1000
+  val minParamCount = 10000
+  val minDomainCount = 0
+  val maxVisitPageCount = 100
+  val minVisitPageCount = 10
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     import sqlContext.implicits._
@@ -51,15 +53,13 @@ object PrepareData {
 
   def prepareVisits()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     val visitsData = sqlContext.read.json(visitsPath)
-    val visits = visitsData.filter(visitsData("site").endsWith("*"))
+    val visits = visitsData
+      .filter(visitsData("site").endsWith("*"))
+      .filter(s"size(timestamps)<=$maxVisitPageCount and size(timestamps)>=$minVisitPageCount")
       .withColumn("visitId", monotonicallyIncreasingId)
+      .select("user", "timestamps", "visitId", "sendingpage", "landingpage")
 
-    //UDF to extract minimum timestamp
-    def minTimestamp = udf {
-      (timestamps: scala.collection.mutable.WrappedArray[Long]) => timestamps.min
-    }
-
-    visits.withColumn("startTime", minTimestamp(visits("timestamps")) / 1000.0)
+    visits
 
   }
 
@@ -76,11 +76,17 @@ object PrepareData {
     combined
   }
 
-
   def main(args: Array[String]): Unit = {
 
-    System.setProperty("spark.master", "local[4]")
+    System.setProperty("spark.master", "local[8]")
     System.setProperty("spark.app.name", "DeepVisit")
+    System.setProperty("spark.driver.memory", "8g")
+    System.setProperty("spark.sql.shuffle.partitions", "4096")
+
+    val blockSize: Int = 4 * 1024 * 1024
+    System.setProperty("dfs.blocksize", blockSize.toString)
+
+
     val conf = new SparkConf()
     implicit val sc = new SparkContext(conf)
     implicit val sqlContext = new SQLContext(sc)
@@ -88,26 +94,10 @@ object PrepareData {
 
 
     val combined = combineVistsAndEvents()
-    //combined.write.parquet(outputRoot + "/combinedParquet")
-
-
-    //val combined = sqlContext.read.parquet(outputRoot + "/combinedParquet")
-    combined.registerTempTable("combined")
-    combined.printSchema()
-    combined.show(10)
-
-    val exploded = combined
-      .select("startTime", "visitId", "userId", "events", "timestamps")
-      .withColumn("event", explode($"events"))
-      .where("event.event.timestamp > startTime - 0.01")
-      .select("startTime","visitId", "event", "timestamps")
-      .withColumn("timestamp", explode($"timestamps"))
-      .select("startTime", "visitId", "event", "timestamp")
-
-    exploded.printSchema()
-    exploded.registerTempTable("exploded")
-    val visitEvents = sqlContext.sql("select *, abs(timestamp/1000.0-event.event.timestamp)<0.01 label from exploded")
-
-    visitEvents.limit(100000).write.option("mapred.output.compress", "true").json(outputRoot + "/labeledJson")
+    combined
+      .write
+      .option("parquet.block.size", blockSize.toString)
+      .option("spark.sql.parquet.compression.codec", "snappy")
+      .parquet(outputRoot + "/combined")
   }
 }

@@ -1,4 +1,6 @@
 import numpy as np
+from scipy import sparse
+import tables as tb
 
 
 def norm_shape(shape):
@@ -69,7 +71,7 @@ def sliding_window(a, ws, ss=None, flatten=True):
     # ensure that ws is smaller than a in every dimension
     if np.any(ws > shape):
         raise ValueError(
-            'ws cannot be larger than a in any dimension.a.shape was %s and ws was %s' % (str(a.shape), str(ws)))
+                'ws cannot be larger than a in any dimension.a.shape was %s and ws was %s' % (str(a.shape), str(ws)))
 
     # how many slices will there be in each dimension?
     newshape = norm_shape(((shape - ws) // ss) + 1)
@@ -91,3 +93,40 @@ def sliding_window(a, ws, ss=None, flatten=True):
     # remove any dimensions with size 1
     dim = filter(lambda i: i != 1, dim)
     return strided.reshape(dim)
+
+
+# def save_sparse_csr(filename,array):
+#     np.savez(filename,data = array.data ,indices=array.indices,
+#              indptr =array.indptr, shape=array.shape )
+#
+# def load_sparse_csr(filename):
+#     loader = np.load(filename)
+#     return csr_matrix((  loader['data'], loader['indices'], loader['indptr']),
+#                       shape = loader['shape'])
+
+
+# def store_sparse_mat(m, name, store):
+#     msg = "This code only works for csr matrices"
+#     assert (m.__class__ == sparse.csr.csr_matrix), msg
+#     with tb.openFile(store, 'a') as f:
+#         for par in ('data', 'indices', 'indptr', 'shape'):
+#             full_name = '%s_%s' % (name, par)
+#             try:
+#                 n = getattr(f.root, full_name)
+#                 n._f_remove()
+#             except AttributeError:
+#                 pass
+#
+#             arr = np.array(getattr(m, par))
+#             atom = tb.Atom.from_dtype(arr.dtype)
+#             ds = f.createCArray(f.root, full_name, atom, arr.shape)
+#             ds[:] = arr
+#
+#
+# def load_sparse_mat(name, store):
+#     with tb.openFile(store) as f:
+#         pars = []
+#         for par in ('data', 'indices', 'indptr', 'shape'):
+#             pars.append(getattr(f.root, '%s_%s' % (name, par)).read())
+#     m = sparse.csr_matrix(tuple(pars[:3]), shape=pars[3])
+#     return m

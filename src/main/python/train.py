@@ -37,13 +37,12 @@ def main():
     for x, Y in event_data('/home/jenia/Deep/labeledJson'):
         X = sliding_window(np.pad(x.toarray(), ((max_t - 1, 0), (0, 0)), 'constant', constant_values=-1)
                            , (5, n_desc), (1, 0))
-        print X[0, :]
-        print x.shape
-        print X.shape
-        print Y.shape
-        print '----'
-        print model.predict(X)
-        model.fit(X, Y)
+        try:
+            model.fit(X,Y, nb_epoch=5)
+            print model.predict(X)
+        except:
+            print 'bad input', x
+
 
 
 
