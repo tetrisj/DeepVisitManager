@@ -3,7 +3,10 @@ from keras.layers.core import Dense, Activation, Dropout
 from keras.optimizers import SGD
 from keras.layers.recurrent import LSTM
 from keras.models import Sequential
-from pyspark import SparkContext, SQLContext
+from keras.callbacks import ModelCheckpoint
+from pyspark import SparkContext, SQLContext, SparkConf
+from pyspark.storagelevel import StorageLevel
+from itertools import islice
 from scipy import sparse
 
 # Move to global config
@@ -64,43 +67,83 @@ def make_model():
     model.add(Dense(len(states)))
     model.add(Activation('softmax'))
 
-    sgd = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    sgd = SGD(lr=0.1, decay=1e-6, momentum=0.9, nesterov=True)
     # model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
     model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
 
+def train_chunk(X, Y, model):
+    try:
+        model.fit(X, Y, nb_epoch=2, batch_size=1024, show_accuracy=True)
+        model.fit_generator()
+        model.save_weights('/home/jenia/Deep/visit.h5', overwrite=True)
+    except:
+        import traceback
+        traceback.print_exc()
+    finally:
+        X = None
+        Y = None
+    return X, Y
+
+
+def open_sparse(x):
+    return np.array([m.toarray() for m in x])
+
+
+def sample_iterator(combined_df):
+    ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
+    '''
+    sample_fraction = 0.1  # Mostly used to keep some randomness while still retaining big enough batches
+    batch_size = 4096
+    X_batch = None
+    Y_batch = None
+    while True:
+        training_rdd = combined_df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
+        for x, y in training_rdd.toLocalIterator():
+            X = open_sparse(x)
+            if X_batch is None:
+                X_batch = X
+                Y_batch = y
+            else:
+                X_batch = np.vstack([X_batch, X])
+                Y_batch = np.vstack([Y_batch, y])
+            if X_batch.shape[0] > batch_size:
+                yield X_batch, Y_batch
+                X_batch = None
+                Y_batch = None
+
+
 def main():
-    sc = SparkContext()
+    conf = SparkConf().set("spark.sql.shuffle.partitions", "4096") \
+        .set("spark.python.worker.memory", "2g") \
+        .set("spark.memory.storageFraction", "0.1")
+
+    sc = SparkContext(conf=conf)
     sqlContext = SQLContext(sc)
-    #    combinedDF = sqlContext.read.parquet('/home/jenia/Deep/combined/')
-    combinedDF = sqlContext.read.parquet(
-        '/home/jenia/Deep/combined/')
+    combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_train/')
+    samples_to_train = 512 * 256  # Should be big enough to generalize
+    sample_fraction = 0.1
+    save_callback = ModelCheckpoint(filepath='/home/jenia/Deep/visit.h5')
+    #    combinedDF = sqlContext.read.parquet(
+    #        '/home/jenia/Deep/combined/part-r-00000-fea4cef7-4875-49b0-a9db-4904a007a852.gz.parquet')
 
     model = make_model()
-    training = combinedDF.rdd.coalesce(2048, True).map(learning_set).toLocalIterator()
+    model.load_weights('/home/jenia/Deep/visit.h5')
 
-    samples_to_train = 128 * 64
-    X = None
-    Y = None
-    for x, y in training:
-        if X is None:
-            X = np.array([m.toarray() for m in x])
-            Y = y
-        else:
-            X = np.vstack([X, np.array([m.toarray() for m in x])])
-            Y = np.vstack([Y, y])
+    test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
+    validation_data = sample_iterator(test_combined_df).next()
 
-        if X.shape[0] >= samples_to_train:
-            try:
-                model.fit(X, Y, nb_epoch=32, batch_size=128)
-                model.save_weights('/home/jenia/Deep/visit.h5', overwrite=True)
-            except:
-                import traceback
-                traceback.print_exc()
-            finally:
-                X = None
-                Y = None
+    for i in xrange(100):
+        training_rdd = combined_df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
+        training_generator = sample_iterator(combined_df)
+        model.fit_generator(training_generator,
+                            samples_per_epoch=samples_to_train,
+                            nb_epoch=200,
+                            show_accuracy=True,
+                            nb_worker=2,
+                            callbacks=[save_callback],
+                            validation_data=validation_data)
 
 
 if __name__ == '__main__':
