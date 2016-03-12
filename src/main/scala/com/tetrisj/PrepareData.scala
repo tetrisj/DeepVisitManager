@@ -23,7 +23,7 @@ object PrepareData {
   val maxVisitPageCount = 100
   val minVisitPageCount = 10
   val maxUserEventCount = 400
-  val minWord2VecCount = 10000
+  val minWord2VecCount = 1000
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     import sqlContext.implicits._
@@ -32,47 +32,26 @@ object PrepareData {
         t._2.toString.split('\n').toList.map(Data.RawEvent.fromString))
     }
 
-    //Find url parameters (for future vectors)
+    val word2vec = new Word2Vec().setMinCount(minWord2VecCount)
 
-    val allParams = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-      val params = Features.urlParams(event.requestUrl) ++ Features.urlParams(event.prevUrl)
-      params.toSeq.map(p => (p, 1))
-    }
-    val topParams = allParams.reduceByKey(_ + _).filter { p => p._2 > minParamCount }.keys
-    val topParamsDict = topParams.collect.zipWithIndex.toMap
+    //Calculate word2vec
+//    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
+//      Seq(Features.urlSeq(event.requestUrl),
+//        Features.urlSeq(event.referrerUrl),
+//        Features.urlSeq(event.prevUrl))
+//    }
 
-    //Find domains  (for future vectors)
-    val allDomains = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-      Features.urlTopDomain(event.requestUrl)
-    }
+//    val model = word2vec.fit(allSeqs)
+//    model.save(sc,"/home/jenia/Deep/word2vecmodel")
 
-    val topDomains = allDomains.countByValue.filter { p => p._2 > minDomainCount }.keys
-    val topDomainsDict = topDomains.zipWithIndex.toMap
+    val model = Word2VecModel.load(sc,"/home/jenia/Deep/word2vecmodel")
 
     val eventsRDD = rawUserEventsRDD.map { ue =>
       Data.UserEvents(ue.userId,
-        ue.events.map(e => Features.eventFeatures(e, topParamsDict, topDomainsDict)))
+        ue.events.map(e => Features.eventFeatures(e, model)))
     }
+
     eventsRDD.toDF
-  }
-
-  def prepareEventsW2V()(implicit sc: SparkContext, sqlContext: SQLContext) = {
-    import sqlContext.implicits._
-    val rawUserEventsRDD = sc.sequenceFile[Text, Text](eventsPath, 16).map { t =>
-      RawUserEvents(t._1.toString,
-        t._2.toString.split('\n').toList.map(Data.RawEvent.fromString))
-    }
-
-    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-      Seq(Features.urlSeq(event.requestUrl),
-        Features.urlSeq(event.referrerUrl),
-        Features.urlSeq(event.prevUrl))
-    }
-
-    val word2vec = new Word2Vec().setMinCount(minWord2VecCount)
-    val model = word2vec.fit(allSeqs)
-    println(model.transform("google.com"))
-    println(model.findSynonyms("google.com",10))
 
   }
 
@@ -110,6 +89,8 @@ object PrepareData {
     visitConnections.printSchema()
     visitConnections.show()
 
+
+
     val events = prepareEvents()
     events.registerTempTable("events")
 
@@ -142,7 +123,9 @@ object PrepareData {
     implicit val sqlContext = new SQLContext(sc)
     import sqlContext.implicits._
 
-    prepareEventsW2V()
+    import org.apache.log4j.{Level, Logger}
+    Logger.getLogger("org.apache.spark").setLevel(Level.INFO)
+    Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
 
     val combined = combineVistsAndEvents()
 

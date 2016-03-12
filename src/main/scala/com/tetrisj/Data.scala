@@ -7,7 +7,7 @@ import org.apache.spark.mllib.linalg.SparseVector
   */
 object Data {
   case class RawEvent(timestamp: Double, requestUrl: String, referrerUrl: String, prevUrl: String)
-  case class EventWithFeatures(event:RawEvent, feature:Map[Int,Double])
+  case class EventWithFeatures(event:RawEvent, feature:List[Double])
 
 
   case class RawUserEvents(userId: String, events: List[RawEvent]) {

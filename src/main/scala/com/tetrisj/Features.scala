@@ -5,6 +5,7 @@ import java.nio.charset.Charset
 import com.google.common.net.InternetDomainName
 import org.apache.commons.httpclient.URI
 import org.apache.http.client.utils.URLEncodedUtils
+import org.apache.spark.mllib.feature.{Word2VecModel, Word2Vec}
 import org.apache.spark.mllib.linalg.{SparseVector, Vector}
 
 import scala.util.hashing.MurmurHash3
@@ -65,40 +66,29 @@ object Features {
     res
   }
 
-  def urlFeatures(u: String, topParams: Map[String,Int], topDomains: Map[String,Int]) = {
-    // domain   :  int
-    // params   :  array of flags for each important parameter
-    // hash     :  murmur3 hash of the complete url
-    // features :  [params][domain][hash]
-    // hash     :  murmur3(u)
-    // returns features as indices and hash as Double
+  val zeroVector = org.apache.spark.mllib.linalg.Vectors.zeros(100)
 
-    val paramVectorSize = topParams.size
-
+  def safeTransform(s: String)(implicit model: Word2VecModel) = {
     try{
-      val domain = urlTopDomain(u) match {
-        case Some(d) => topDomains.getOrElse(d,-1).toDouble
-        case None    => -2.0
-      }
-      val urlHash = MurmurHash3.stringHash(u,seed).toDouble
-      val params = urlParams(u)
-      val paramMap = params.flatMap(topParams.get).map(i => i->1.0).toMap
-      paramMap + (paramVectorSize -> domain) + (paramVectorSize+1 -> urlHash)
-    }catch {
-      case e: Exception => Map[Int, Double]()
+      model.transform(s)
+    }catch{
+      case e:Exception => zeroVector
     }
   }
 
-  def eventFeatures(e: Data.RawEvent, topParams: Map[String,Int], topDomains: Map[String,Int]) ={
+
+  def urlFeatures(u: String, model: Word2VecModel) = {
+    val res = urlSeq(u).map(safeTransform).take(10).padTo(10, zeroVector)
+    res
+  }
+
+  def eventFeatures(e: Data.RawEvent, model: Word2VecModel) ={
     // [request features][href features][prev features][timestamp]
-    val featureSize = topParams.size + 2
-    val requestMap =  urlFeatures(e.requestUrl, topParams, topDomains)
-    val hrefMap =  urlFeatures(e.referrerUrl, topParams, topDomains)
-    val prevMap =  urlFeatures(e.prevUrl, topParams, topDomains)
-    val features = requestMap ++
-      hrefMap.map(kv => kv._1+featureSize -> kv._2) ++
-      prevMap.map(kv => kv._1+featureSize*2 -> kv._2) +
-      (featureSize*3-> e.timestamp)
+    val requestMap =  urlFeatures(e.requestUrl, model)
+    val hrefMap =  urlFeatures(e.referrerUrl, model)
+    val prevMap =  urlFeatures(e.prevUrl, model)
+    val featureVectors = requestMap ++ hrefMap ++ prevMap
+    val features = featureVectors.flatMap(_.toArray)
 
     Data.EventWithFeatures(e, features)
   }
