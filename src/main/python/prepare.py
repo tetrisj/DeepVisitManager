@@ -3,11 +3,13 @@ from keras.layers.core import Dense, Activation, Dropout
 from keras.optimizers import SGD
 from keras.layers.recurrent import LSTM
 from keras.models import Sequential
-from keras.callbacks import ModelCheckpoint
+from keras.callbacks import ModelCheckpoint, Callback
 from pyspark import SparkContext, SQLContext, SparkConf
-from pyspark.storagelevel import StorageLevel
-from itertools import islice
 from scipy import sparse
+import os
+
+import warnings
+warnings.filterwarnings("ignore")
 
 # Move to global config
 n_desc = 1669
@@ -60,47 +62,45 @@ def learning_set(combined):
 
 def make_model():
     model = Sequential()
-    model.add(LSTM(512, return_sequences=True, input_shape=(max_t, n_desc)))
-    model.add(Dropout(0.2))
-    model.add(LSTM(512, return_sequences=False))
-    model.add(Dropout(0.2))
-    model.add(Dense(len(states)))
+    model.add(LSTM(128, return_sequences=True, input_shape=(max_t, n_desc)))
+    model.add(LSTM(128, return_sequences=True))
+    model.add(LSTM(128, return_sequences=True))
+    model.add(LSTM(128, return_sequences=True))
+    model.add(LSTM(2, return_sequences=False))
     model.add(Activation('softmax'))
 
-    sgd = SGD(lr=0.1, decay=1e-6, momentum=0.9, nesterov=True)
-    # model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    #model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    sgd = SGD(lr=0.0001, decay=1e-6, momentum=0.9, nesterov=True)
     model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
-
-
-def train_chunk(X, Y, model):
-    try:
-        model.fit(X, Y, nb_epoch=2, batch_size=1024, show_accuracy=True)
-        model.fit_generator()
-        model.save_weights('/home/jenia/Deep/visit.h5', overwrite=True)
-    except:
-        import traceback
-        traceback.print_exc()
-    finally:
-        X = None
-        Y = None
-    return X, Y
 
 
 def open_sparse(x):
     return np.array([m.toarray() for m in x])
 
 
-def sample_iterator(combined_df):
+def concurrent_local_iterator(rdd, concurrency=16):
+    partition_count = rdd.getNumPartitions()
+    for start_partition in range(0, partition_count, concurrency):
+        end_partition = min(partition_count, start_partition + concurrency)
+        partitions = range(start_partition, end_partition)
+        rows = rdd.context.runJob(rdd, lambda x: x, partitions)
+        for row in rows:
+            yield row
+
+
+def sample_iterator(df, batch_size=8192):
     ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
+    :param df: dataframe to sample
+    :param batch_size: Number of sample in each yielded batch
     '''
     sample_fraction = 0.1  # Mostly used to keep some randomness while still retaining big enough batches
-    batch_size = 4096
     X_batch = None
     Y_batch = None
     while True:
-        training_rdd = combined_df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
-        for x, y in training_rdd.toLocalIterator():
+        samples_rdd = df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
+        samples_iterator = concurrent_local_iterator(samples_rdd)
+        for x, y in samples_iterator:
             X = open_sparse(x)
             if X_batch is None:
                 X_batch = X
@@ -114,36 +114,61 @@ def sample_iterator(combined_df):
                 Y_batch = None
 
 
+class WriteLosses(Callback):
+
+    def __init__(self, filepath):
+        super(WriteLosses, self).__init__()
+        self.path = filepath
+
+    def on_train_begin(self, logs={}):
+        self.f = file(self.path, 'wb')
+        self.f.write('type,loss,accuracy\n')
+
+    def on_batch_end(self, batch, logs={}):
+        self.f.write('batch,%s,%s\n' % (logs.get('loss'), logs.get('acc')))
+
+    def on_epoch_end(self, batch, logs={}):
+        self.f.write('epoch,%s,%s\n' % (logs.get('val_loss'), logs.get('val_acc')))
+        self.f.flush()
+
+    def on_train_end(self, logs={}):
+        self.f.close()
+
+
 def main():
     conf = SparkConf().set("spark.sql.shuffle.partitions", "4096") \
         .set("spark.python.worker.memory", "2g") \
-        .set("spark.memory.storageFraction", "0.1")
+        .set("spark.memory.storageFraction", "0.1") \
+        .set("spark.ui.showConsoleProgress", "false")
 
+    model_save_path = '/home/jenia/Deep/visit.h5'
+    log_path = '/home/jenia/Deep/train.log'
     sc = SparkContext(conf=conf)
     sqlContext = SQLContext(sc)
     combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_train/')
-    samples_to_train = 512 * 256  # Should be big enough to generalize
-    sample_fraction = 0.1
-    save_callback = ModelCheckpoint(filepath='/home/jenia/Deep/visit.h5')
+    samples_per_epoch = 1024 * 128
+
+    save_callback = ModelCheckpoint(filepath=model_save_path, save_best_only=True)
+    log_callback = WriteLosses(filepath=log_path)
     #    combinedDF = sqlContext.read.parquet(
     #        '/home/jenia/Deep/combined/part-r-00000-fea4cef7-4875-49b0-a9db-4904a007a852.gz.parquet')
 
     model = make_model()
-    model.load_weights('/home/jenia/Deep/visit.h5')
+    if os.path.isfile(model_save_path):
+        print 'Loading model from: %s' % model_save_path
+        model.load_weights(model_save_path)
 
     test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
-    validation_data = sample_iterator(test_combined_df).next()
+    validation_data = sample_iterator(test_combined_df, batch_size=1024 * 16).next()
 
-    for i in xrange(100):
-        training_rdd = combined_df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
-        training_generator = sample_iterator(combined_df)
-        model.fit_generator(training_generator,
-                            samples_per_epoch=samples_to_train,
-                            nb_epoch=200,
-                            show_accuracy=True,
-                            nb_worker=2,
-                            callbacks=[save_callback],
-                            validation_data=validation_data)
+    training_generator = sample_iterator(combined_df)
+    model.fit_generator(training_generator,
+                        samples_per_epoch=samples_per_epoch,
+                        nb_epoch=200,
+                        show_accuracy=True,
+                        nb_worker=2,
+                        callbacks=[save_callback, log_callback],
+                        validation_data=validation_data)
 
 
 if __name__ == '__main__':

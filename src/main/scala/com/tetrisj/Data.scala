@@ -9,6 +9,7 @@ object Data {
   case class RawEvent(timestamp: Double, requestUrl: String, referrerUrl: String, prevUrl: String)
   case class EventWithFeatures(event:RawEvent, feature:Map[Int,Double])
 
+
   case class RawUserEvents(userId: String, events: List[RawEvent]) {
     override def toString: String = s"UserEvents[$userId,$events]"
   }
@@ -25,4 +26,6 @@ object Data {
   }
 
   case class UserEvents(userId: String, events: List[EventWithFeatures])
+  case class VisitConnection(sendingPage: String, landingPage: String, landingTime: Double)
+  case class UserVisitConnections(userId: String, connections: List[VisitConnection])
 }

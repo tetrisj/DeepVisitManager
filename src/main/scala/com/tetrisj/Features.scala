@@ -27,7 +27,7 @@ object Features {
     }
   }
 
-  def urlDomain(u: String) = {
+  def urlTopDomain(u: String) = {
     try {
       val url = new URI(u, false)
       val domain = InternetDomainName.from(url.getHost).topPrivateDomain.name()
@@ -35,6 +35,34 @@ object Features {
     }catch{
       case e:Exception => None
     }
+  }
+
+  def urlDomain(u: String) = {
+    try {
+      val url = new URI(u, false)
+      val domain = InternetDomainName.from(url.getHost).name()
+      Some(domain)
+    }catch{
+      case e:Exception => None
+    }
+  }
+
+  def urlPath(u: String) = {
+    try {
+      val url = new URI(u, false)
+      val path = url.getPath.split('/')
+      path
+    }catch{
+      case e:Exception => Array[String]()
+    }
+  }
+
+  def urlSeq(u:String) = {
+    val domain = urlDomain(u)
+    val path = urlPath(u)
+    val params = urlParams(u)
+    val res = (domain ++ path ++ params).toList
+    res
   }
 
   def urlFeatures(u: String, topParams: Map[String,Int], topDomains: Map[String,Int]) = {
@@ -48,7 +76,7 @@ object Features {
     val paramVectorSize = topParams.size
 
     try{
-      val domain = urlDomain(u) match {
+      val domain = urlTopDomain(u) match {
         case Some(d) => topDomains.getOrElse(d,-1).toDouble
         case None    => -2.0
       }
