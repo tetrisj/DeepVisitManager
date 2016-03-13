@@ -9,21 +9,20 @@ from scipy import sparse
 import os
 
 import warnings
+
 warnings.filterwarnings("ignore")
 
 # Move to global config
-n_desc = 1669
+n_desc = 3 * 100 + 1
 max_t = 5
 # states = ('open', 'moved', 'not-mine', 'closed')
 states = ('open', 'moved')
 
 
 def event_features(event, start_time):
-    feature_dict = {(0, int(k)): v for k, v in event.feature.items()}
-    feature_dict[(0, n_desc - 1)] -= start_time  # Adjust timestamp feature to be relative
-    features = sparse.dok_matrix((1, n_desc))
-    features.update(feature_dict)
-    return features.tocsr()
+    feature = np.array([event.feature.requestVec, event.feature.hrefVec, event.feature.prevVec]).reshape(
+            (1, n_desc - 1))
+    return np.append(feature, event.event.timestamp - start_time)
 
 
 def learning_set(combined):
@@ -32,6 +31,7 @@ def learning_set(combined):
         The label is the decision for that combination of events
         The idea is to simulate a state machine that decides whether a new event belongs to the visit
     '''
+
     timestamps = np.array(combined.timestamps) / 1000.0
     start_time = timestamps.min()
     event_timestamps = np.array(
@@ -46,10 +46,10 @@ def learning_set(combined):
     # Calculate labels (dimension per label)
     Y = np.array([intersect, 1 - intersect]).T
 
-    event_data = sparse.vstack([event_features(event, start_time) for event in combined.events if
-                                event.event.timestamp > start_time - 0.01])
+    event_data = np.vstack([event_features(event, start_time) for event in combined.events if
+                            event.event.timestamp > start_time - 0.01])
 
-    X = [sparse.csr_matrix((max_t, n_desc)) for i in range(n_samples)]
+    X = np.zeros((n_samples, max_t, n_desc))
     # TODO: use something more efficient than iterations
     for i in range(n_samples):
         X[i][max_t - 1] = event_data[i]
@@ -69,14 +69,11 @@ def make_model():
     model.add(LSTM(2, return_sequences=False))
     model.add(Activation('softmax'))
 
-    #model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    # model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
     sgd = SGD(lr=0.0001, decay=1e-6, momentum=0.9, nesterov=True)
     model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
-
-def open_sparse(x):
-    return np.array([m.toarray() for m in x])
 
 
 def concurrent_local_iterator(rdd, concurrency=16):
@@ -95,27 +92,26 @@ def sample_iterator(df, batch_size=8192):
     :param batch_size: Number of sample in each yielded batch
     '''
     sample_fraction = 0.1  # Mostly used to keep some randomness while still retaining big enough batches
-    X_batch = None
-    Y_batch = None
+    X = None
+    Y = None
     while True:
         samples_rdd = df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
         samples_iterator = concurrent_local_iterator(samples_rdd)
         for x, y in samples_iterator:
-            X = open_sparse(x)
-            if X_batch is None:
-                X_batch = X
-                Y_batch = y
+
+            if X is None:
+                X = x
+                Y = y
             else:
-                X_batch = np.vstack([X_batch, X])
-                Y_batch = np.vstack([Y_batch, y])
-            if X_batch.shape[0] > batch_size:
-                yield X_batch, Y_batch
-                X_batch = None
-                Y_batch = None
+                X = np.vstack([X, x])
+                Y = np.vstack([Y, y])
+            if X.shape[0] > batch_size:
+                yield X, Y
+                X = None
+                Y = None
 
 
 class WriteLosses(Callback):
-
     def __init__(self, filepath):
         super(WriteLosses, self).__init__()
         self.path = filepath
@@ -160,6 +156,7 @@ def main():
 
     test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
     validation_data = sample_iterator(test_combined_df, batch_size=1024 * 16).next()
+    print 'Loaded validation data'
 
     training_generator = sample_iterator(combined_df)
     model.fit_generator(training_generator,
@@ -168,7 +165,8 @@ def main():
                         show_accuracy=True,
                         nb_worker=2,
                         callbacks=[save_callback, log_callback],
-                        validation_data=validation_data)
+                        validation_data=validation_data
+                        )
 
 
 if __name__ == '__main__':

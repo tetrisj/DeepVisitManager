@@ -7,10 +7,11 @@ import org.apache.spark.mllib.linalg.SparseVector
   */
 object Data {
   case class RawEvent(timestamp: Double, requestUrl: String, referrerUrl: String, prevUrl: String)
-  case class EventWithFeatures(event:RawEvent, feature:List[Double])
+  case class EventFeature(requestVec: Array[Float], hrefVec: Array[Float], prevVec: Array[Float], timestamp:Double)
+  case class EventWithFeatures(event:RawEvent, feature:EventFeature)
 
 
-  case class RawUserEvents(userId: String, events: List[RawEvent]) {
+  case class RawUserEvents(userId: String, events: Array[RawEvent]) {
     override def toString: String = s"UserEvents[$userId,$events]"
   }
   object RawEvent {
@@ -25,7 +26,7 @@ object Data {
     }
   }
 
-  case class UserEvents(userId: String, events: List[EventWithFeatures])
+  case class UserEvents(userId: String, events: Array[EventWithFeatures])
   case class VisitConnection(sendingPage: String, landingPage: String, landingTime: Double)
   case class UserVisitConnections(userId: String, connections: List[VisitConnection])
 }

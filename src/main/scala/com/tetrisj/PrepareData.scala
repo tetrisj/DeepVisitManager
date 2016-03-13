@@ -4,9 +4,10 @@ import com.tetrisj.Data.{UserVisitConnections, VisitConnection, RawUserEvents}
 import org.apache.hadoop.io.Text
 import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.functions.{explode, monotonicallyIncreasingId}
+import org.apache.spark.sql.functions.{monotonicallyIncreasingId}
 import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.functions.udf
+
 
 import scala.collection.mutable
 
@@ -20,6 +21,7 @@ object PrepareData {
   val outputRoot = "/home/jenia/Deep"
   val minParamCount = 10000
   val minDomainCount = 0
+  val maxUserPageCount = 1000
   val maxVisitPageCount = 100
   val minVisitPageCount = 10
   val maxUserEventCount = 400
@@ -29,28 +31,32 @@ object PrepareData {
     import sqlContext.implicits._
     val rawUserEventsRDD = sc.sequenceFile[Text, Text](eventsPath, 16).map { t =>
       RawUserEvents(t._1.toString,
-        t._2.toString.split('\n').toList.map(Data.RawEvent.fromString))
-    }
+        t._2.toString.split('\n').map(Data.RawEvent.fromString))
+    }.filter(_.events.size < maxUserPageCount)
 
     val word2vec = new Word2Vec().setMinCount(minWord2VecCount)
 
     //Calculate word2vec
-//    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-//      Seq(Features.urlSeq(event.requestUrl),
-//        Features.urlSeq(event.referrerUrl),
-//        Features.urlSeq(event.prevUrl))
-//    }
+    //    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
+    //      Seq(Features.urlSeq(event.requestUrl),
+    //        Features.urlSeq(event.referrerUrl),
+    //        Features.urlSeq(event.prevUrl))
+    //    }
 
-//    val model = word2vec.fit(allSeqs)
-//    model.save(sc,"/home/jenia/Deep/word2vecmodel")
+    //    val model = word2vec.fit(allSeqs)
+    //    model.save(sc,"/home/jenia/Deep/word2vecmodel")
 
-    val model = Word2VecModel.load(sc,"/home/jenia/Deep/word2vecmodel")
+    val model = Word2VecModel.load(sc, "/home/jenia/Deep/word2vecmodel")
 
-    val eventsRDD = rawUserEventsRDD.map { ue =>
+
+    val t0 = System.nanoTime()
+    val eventsRDD = rawUserEventsRDD.sample(true, 0.01).map { ue =>
       Data.UserEvents(ue.userId,
-        ue.events.map(e => Features.eventFeatures(e, model)))
+        ue.events.map(e => Features.eventFeatures(e, model.getVectors)))
     }
 
+    val t1 = System.nanoTime()
+    println((t1 - t0)/1000000000.0)
     eventsRDD.toDF
 
   }
@@ -71,6 +77,10 @@ object PrepareData {
 
   def combineVistsAndEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     import sqlContext.implicits._
+
+    val events = prepareEvents()
+    events.registerTempTable("events")
+
     val visits = prepareVisits()
     visits.registerTempTable("visits")
 
@@ -86,14 +96,6 @@ object PrepareData {
       .map(t => UserVisitConnections(t._1, t._2.toList))
       .toDF
 
-    visitConnections.printSchema()
-    visitConnections.show()
-
-
-
-    val events = prepareEvents()
-    events.registerTempTable("events")
-
 
 
     val combined = visits
@@ -103,15 +105,15 @@ object PrepareData {
       .join(visitConnections, "userId")
       .select("timestamps", "events", "connections", "visitId")
 
-    combinedWithTransfers.printSchema()
     combinedWithTransfers
   }
 
   def main(args: Array[String]): Unit = {
 
-    System.setProperty("spark.master", "local[8]")
+    System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
     System.setProperty("spark.driver.memory", "24g")
+
     System.setProperty("spark.sql.shuffle.partitions", "4096")
 
     val blockSize: Int = 1 * 1024 * 1024
