@@ -6,7 +6,7 @@ import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
 import org.apache.spark.sql.SQLContext
 import org.apache.spark.sql.functions.{monotonicallyIncreasingId}
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.functions.udf
+import org.apache.spark.sql.functions.{udf, rand}
 
 
 import scala.collection.mutable
@@ -21,11 +21,10 @@ object PrepareData {
   val outputRoot = "/home/jenia/Deep"
   val minParamCount = 10000
   val minDomainCount = 0
-  val maxUserPageCount = 1000
-  val maxVisitPageCount = 100
-  val minVisitPageCount = 10
-  val maxUserEventCount = 400
-  val minWord2VecCount = 1000
+  val maxUserPageCount = 400
+  val maxVisitPageCount = 50
+  val minVisitPageCount = 3
+  val minWord2VecCount = 5
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     import sqlContext.implicits._
@@ -34,29 +33,36 @@ object PrepareData {
         t._2.toString.split('\n').map(Data.RawEvent.fromString))
     }.filter(_.events.size < maxUserPageCount)
 
-    val word2vec = new Word2Vec().setMinCount(minWord2VecCount)
+    val word2vec = new Word2Vec().setMinCount(minWord2VecCount).setNumIterations(3)
 
     //Calculate word2vec
-    //    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-    //      Seq(Features.urlSeq(event.requestUrl),
-    //        Features.urlSeq(event.referrerUrl),
-    //        Features.urlSeq(event.prevUrl))
-    //    }
+//    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
+//      Seq(Features.urlSeq(event.requestUrl),
+//        Features.urlSeq(event.referrerUrl),
+//        Features.urlSeq(event.prevUrl))
+//    }
+//
+//    val urlModel = word2vec.fit(allSeqs)
+//    urlModel.save(sc,"/home/jenia/Deep/word2vec_url_model")
 
-    //    val model = word2vec.fit(allSeqs)
-    //    model.save(sc,"/home/jenia/Deep/word2vecmodel")
+//    val domains = rawUserEventsRDD.flatMap(_.events).map { event =>
+//      Seq(Features.domain(event.requestUrl),
+//        Features.domain(event.referrerUrl),
+//        Features.domain(event.prevUrl))
+//    }
+//    val domainModel = word2vec.fit(domains)
+//    domainModel.save(sc,"/home/jenia/Deep/word2vec_domain_model")
 
-    val model = Word2VecModel.load(sc, "/home/jenia/Deep/word2vecmodel")
+    val urlModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_url_model")
+    val domainModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_domain_model")
+    val urlModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ urlModel.getVectors
+    val domainModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ domainModel.getVectors
 
-
-    val t0 = System.nanoTime()
-    val eventsRDD = rawUserEventsRDD.sample(true, 0.01).map { ue =>
+    val eventsRDD = rawUserEventsRDD.map { ue =>
       Data.UserEvents(ue.userId,
-        ue.events.map(e => Features.eventFeatures(e, model.getVectors)))
+        ue.events.map(e => Features.eventFeatures(e, urlModelVectors, domainModelVectors)))
     }
 
-    val t1 = System.nanoTime()
-    println((t1 - t0)/1000000000.0)
     eventsRDD.toDF
 
   }
@@ -100,10 +106,9 @@ object PrepareData {
 
     val combined = visits
       .join(events, events("userId") === visits("user"))
-      .filter(s"size(events) <= $maxUserEventCount")
     val combinedWithTransfers = combined
       .join(visitConnections, "userId")
-      .select("timestamps", "events", "connections", "visitId")
+      .select("timestamps", "events", "connections")
 
     combinedWithTransfers
   }
@@ -112,9 +117,9 @@ object PrepareData {
 
     System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
-    System.setProperty("spark.driver.memory", "24g")
+    System.setProperty("spark.driver.memory", "22g")
 
-    System.setProperty("spark.sql.shuffle.partitions", "4096")
+    System.setProperty("spark.sql.shuffle.partitions", "512")
 
     val blockSize: Int = 1 * 1024 * 1024
     System.setProperty("dfs.blocksize", blockSize.toString)
@@ -126,20 +131,20 @@ object PrepareData {
     import sqlContext.implicits._
 
     import org.apache.log4j.{Level, Logger}
-    Logger.getLogger("org.apache.spark").setLevel(Level.INFO)
-    Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
+    //Logger.getLogger("org.apache.spark").setLevel(Level.INFO)
+    val combined = combineVistsAndEvents().withColumn("rand", rand())
+    //Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
 
-    val combined = combineVistsAndEvents()
 
     combined
-      .filter(combined("visitId") % 10 > 1)
+      .filter(combined("rand") > 0.1)
       .write
       .option("parquet.block.size", blockSize.toString)
       .option("spark.sql.parquet.compression.codec", "gzip")
       .parquet(outputRoot + "/combined_train")
 
     combined
-      .filter(combined("visitId") % 10 <= 1)
+      .filter(combined("rand") < 0.1)
       .write
       .option("parquet.block.size", blockSize.toString)
       .option("spark.sql.parquet.compression.codec", "gzip")

@@ -13,6 +13,8 @@ import com.github.fommil.netlib.{BLAS => NetlibBLAS, F2jBLAS}
 import org.apache.spark.mllib.linalg.{SparseVector, Vector, DenseVector, Vectors}
 import org.scalatest.path
 
+import scala.collection.mutable
+
 
 /**
   * Created by jenia on 26/02/16.
@@ -24,6 +26,7 @@ object Features {
 
   val seed = 123891273
   val nUrlFeatures = 10
+  val noDomainString = "<NO_DOMAIN>"
   @transient private var _f2jBLAS: NetlibBLAS = _
   @transient private var _nativeBLAS: NetlibBLAS = _
 
@@ -36,28 +39,40 @@ object Features {
   }
 
 
-  def urlTopDomain(u: String) = {
+  def domain(u: String) = {
     try {
       val url = new URI(u, false)
-      val domain = InternetDomainName.from(url.getHost).topPrivateDomain.name()
-      Some(domain)
+      val domain = url.getHost
+      domain
     } catch {
-      case e: Exception => None
+      case e: Exception => noDomainString
     }
   }
 
+  def urlSeq(u:String) = {
+    try {
+    val url = new URI(u, false)
+    val domain = url.getHost
+    val path = url.getPath.split('/')
+    val params = URLEncodedUtils.parse(url.getQuery, Charset.forName("UTF-8")).map(_.getName).toArray
+    val res = (domain +: path ++: params).toList
+    res
+    }catch {
+      case e: Exception => List[String]()
+    }
+  }
 
-  class UrlSeq(val u: String, model: Map[String, Array[Float]]) extends Iterator[Array[Float]] {
+  //Iterator directly for vectors for speed and to avoid generating long sequences in memory
+  class UrlVectorsIterator(val u: String, model: mutable.Map[String, Array[Float]]) extends Iterator[Array[Float]] {
     var i = 0
-    var _url: java.net.URI = null
+    var _url: URI = null
     var _path: Array[String] = null
     var _params: scala.collection.mutable.Buffer[String] = null
 
-    def url(): java.net.URI = {
+    def url() = {
       if (_url == null)
         try {
-          //TODO: Try with a better url parser
-          _url = new java.net.URI(u)
+          _url = new URI(u, false)
         }catch {
           case e: Exception => null
         }
@@ -82,7 +97,7 @@ object Features {
 
     def params = {
       if (_params == null)
-        _params = URLEncodedUtils.parse(url, "UTF-8").map(_.getName)
+        _params = URLEncodedUtils.parse(url.getQuery, Charset.forName("UTF-8")).map(_.getName)
       _params
     }
 
@@ -91,9 +106,9 @@ object Features {
       else model.getOrElse(params(i - 1 - path.size), zeroVector)
     }
 
-    override def hasNext: Boolean = i < nUrlFeatures
+    @inline override def hasNext: Boolean = i < nUrlFeatures
 
-    override def next() = {
+    @inline override def next() = {
       try {
         if (url ==null) zeroVector
         else if (i == 0) hostVector
@@ -110,7 +125,7 @@ object Features {
   /**
     * y += a * x
     */
-  private def axpy(a: Float, x: Array[Float], y: Array[Float]): Unit = {
+  @inline private def axpy(a: Float, x: Array[Float], y: Array[Float]): Unit = {
     val n = x.size
     f2jBLAS.saxpy(n, a, x, 1, y, 1)
   }
@@ -123,35 +138,39 @@ object Features {
   }
 
   val zeroVector = Array.fill[Float](100)(0.0f)
-  val scaleFactor = 1.0f/nUrlFeatures
+  zeroVector.clone()
 
-  def urlFeatures(u: String, model: Map[String, Array[Float]]) = {
-    val t0 = System.nanoTime()
-    val sentenceVecs = new UrlSeq(u, model)
 
-    val sum = zeroVector.clone()
+  def urlFeatures(u: String, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]]) = {
+    val sentenceVecs = new UrlVectorsIterator(u, urlModelMap)
+    var featureCount = 0
+    val urlVector = Array.fill[Float](200)(0.0f)
     sentenceVecs.foreach { v =>
-      axpy(1.0f, v, sum)
+      axpy(1.0f, v, urlVector)
+      featureCount+=1
     }
-    scal(scaleFactor, sum)
-    sum
-
+    if (featureCount>0) {
+      val scaleFactor = 1.0f/nUrlFeatures
+      scal(scaleFactor, urlVector)
+    }
+    domainModelMap.get(domain(u)) match {
+      case Some(v) => Array.copy(v,0,urlVector,100,100)
+      case _ => None
+    }
+    urlVector
   }
 
 
-  def eventFeatures(e: Data.RawEvent, modelMap: Map[String, Array[Float]]) = {
+  def eventFeatures(e: Data.RawEvent, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]]) = {
     // [request features][href features][prev features][timestamp]
-
-    val t0 = System.nanoTime()
     val feature = EventFeature(
-      urlFeatures(e.requestUrl, modelMap),
-      urlFeatures(e.referrerUrl, modelMap),
-      urlFeatures(e.prevUrl, modelMap),
+      urlFeatures(e.requestUrl, urlModelMap,domainModelMap),
+      urlFeatures(e.referrerUrl, urlModelMap,domainModelMap),
+      urlFeatures(e.prevUrl, urlModelMap, domainModelMap),
       e.timestamp
     )
 
     val res = Data.EventWithFeatures(e, feature)
-    val t1 = System.nanoTime()
     //println(t1 - t0)
     res
 

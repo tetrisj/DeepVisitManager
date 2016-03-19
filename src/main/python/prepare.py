@@ -6,6 +6,7 @@ from keras.models import Sequential
 from keras.callbacks import ModelCheckpoint, Callback
 from pyspark import SparkContext, SQLContext, SparkConf
 from scipy import sparse
+from sklearn.metrics import confusion_matrix
 import os
 
 import warnings
@@ -13,15 +14,17 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # Move to global config
-n_desc = 3 * 100 + 1
-max_t = 5
-# states = ('open', 'moved', 'not-mine', 'closed')
-states = ('open', 'moved')
+n_desc = 3 * 200 + 1
+max_t = 4
+states = ('open', 'moved', 'moved_from_me')
+
+
+# states = ('open', 'moved')
 
 
 def event_features(event, start_time):
     feature = np.array([event.feature.requestVec, event.feature.hrefVec, event.feature.prevVec]).reshape(
-            (1, n_desc - 1))
+        (1, n_desc - 1))
     return np.append(feature, event.event.timestamp - start_time)
 
 
@@ -32,21 +35,23 @@ def learning_set(combined):
         The idea is to simulate a state machine that decides whether a new event belongs to the visit
     '''
 
-    timestamps = np.array(combined.timestamps) / 1000.0
-    start_time = timestamps.min()
+    events = sorted(combined.events, key=lambda e: e.event.timestamp)
+    visit_timestamps = np.array(sorted(combined.timestamps)) / 1000.0
+    start_time = visit_timestamps.min()
+    landing_timestamps = dict([(timestamp, (s, l)) for s, l, timestamp in combined.connections])
     event_timestamps = np.array(
-            [event.event.timestamp for event in combined.events if event.event.timestamp > start_time - 0.01])
+        [event.event.timestamp for event in events if event.event.timestamp > start_time - 0.01])
 
     # Match events to visit timestamps
 
-    intersect = np.in1d(event_timestamps, timestamps) * 1  # Events with matching timestamps get a 1 label
+    intersect = np.in1d(event_timestamps, visit_timestamps) * 1  # Events with matching timestamps get a 1 label
     true_indices = intersect.nonzero()[0]
     n_samples = len(intersect)
 
-    # Calculate labels (dimension per label)
-    Y = np.array([intersect, 1 - intersect]).T
-
-    event_data = np.vstack([event_features(event, start_time) for event in combined.events if
+    # Calculate labels (dimension per label). transition labels would be added later
+    # mine | not mine | moved from me
+    Y = np.array([intersect, 1 - intersect, np.zeros(n_samples)]).T
+    event_data = np.vstack([event_features(event, start_time) for event in events if
                             event.event.timestamp > start_time - 0.01])
 
     X = np.zeros((n_samples, max_t, n_desc))
@@ -56,27 +61,30 @@ def learning_set(combined):
         true_for_i = [idx for idx in true_indices if idx < i][-max_t + 1:]
         if true_for_i:
             X[i][max_t - 1 - len(true_for_i): max_t - 1] = event_data[true_for_i]
+            # Set labels for connection if nessecary
+            if event_timestamps[i] in landing_timestamps:
+                sending, landing = landing_timestamps[event_timestamps[i]]
+                if landing in events[i].event.requestUrl and sending in events[true_for_i[-1]].event.requestUrl:
+                    Y[i] = np.array([0, 0, 1])  # Transition
+
 
     return X, Y
 
 
 def make_model():
     model = Sequential()
-    model.add(LSTM(128, return_sequences=True, input_shape=(max_t, n_desc)))
-    model.add(LSTM(128, return_sequences=True))
-    model.add(LSTM(128, return_sequences=True))
-    model.add(LSTM(128, return_sequences=True))
-    model.add(LSTM(2, return_sequences=False))
+    model.add(LSTM(512, return_sequences=True, input_shape=(max_t, n_desc)))
+    model.add(LSTM(512, return_sequences=True, dropout_W=0.2, input_shape=(max_t, n_desc)))
+    model.add(LSTM(len(states), return_sequences=False, dropout_W=0.2))
     model.add(Activation('softmax'))
 
-    # model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
-    sgd = SGD(lr=0.0001, decay=1e-6, momentum=0.9, nesterov=True)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd)
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    # sgd = SGD(lr=0.01, momentum=0.9, nesterov=True)
+    # model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
 
-
-def concurrent_local_iterator(rdd, concurrency=16):
+def concurrent_local_iterator(rdd, concurrency=4):
     partition_count = rdd.getNumPartitions()
     for start_partition in range(0, partition_count, concurrency):
         end_partition = min(partition_count, start_partition + concurrency)
@@ -86,7 +94,7 @@ def concurrent_local_iterator(rdd, concurrency=16):
             yield row
 
 
-def sample_iterator(df, batch_size=8192):
+def sample_iterator(df, batch_size=8196):
     ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
     :param df: dataframe to sample
     :param batch_size: Number of sample in each yielded batch
@@ -157,6 +165,9 @@ def main():
     test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
     validation_data = sample_iterator(test_combined_df, batch_size=1024 * 16).next()
     print 'Loaded validation data'
+    res = np.argmax(model.predict(validation_data[0]), 1)
+    labels = np.argmax(validation_data[1], 1)
+    print confusion_matrix(res, labels)
 
     training_generator = sample_iterator(combined_df)
     model.fit_generator(training_generator,
