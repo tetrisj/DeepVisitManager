@@ -1,10 +1,11 @@
 import numpy as np
-from keras.layers.core import Dense, Activation, Dropout
+from keras.layers.core import Activation
 from keras.optimizers import SGD
 from keras.layers.recurrent import LSTM
 from keras.models import Sequential
 from keras.callbacks import ModelCheckpoint, Callback
 from pyspark import SparkContext, SQLContext, SparkConf
+from keras.regularizers import l2
 from scipy import sparse
 from sklearn.metrics import confusion_matrix
 import os
@@ -17,6 +18,7 @@ warnings.filterwarnings("ignore")
 n_desc = 3 * 200 + 1
 max_t = 4
 states = ('open', 'moved', 'moved_from_me')
+weights = np.array([5, 1., 100.]) # Relative importance of each type of labeled sample, based on weight
 
 
 # states = ('open', 'moved')
@@ -66,25 +68,33 @@ def learning_set(combined):
                 sending, landing = landing_timestamps[event_timestamps[i]]
                 if landing in events[i].event.requestUrl and sending in events[true_for_i[-1]].event.requestUrl:
                     Y[i] = np.array([0, 0, 1])  # Transition
-
-
     return X, Y
 
 
 def make_model():
     model = Sequential()
-    model.add(LSTM(512, return_sequences=True, input_shape=(max_t, n_desc)))
-    model.add(LSTM(512, return_sequences=True, dropout_W=0.2, input_shape=(max_t, n_desc)))
-    model.add(LSTM(len(states), return_sequences=False, dropout_W=0.2))
+    r = l2(0.01)
+    model.add(LSTM(512, return_sequences=True,
+                   W_regularizer=r,
+                   U_regularizer=r,
+                   input_shape=(max_t, n_desc)))
+    model.add(LSTM(512, return_sequences=True,
+                   W_regularizer=r,
+                   U_regularizer=r,
+                   input_shape=(max_t, n_desc)))
+    model.add(LSTM(len(states),
+                   W_regularizer=r,
+                   U_regularizer=r,
+                   return_sequences=False))
     model.add(Activation('softmax'))
 
-    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
-    # sgd = SGD(lr=0.01, momentum=0.9, nesterov=True)
-    # model.compile(loss='categorical_crossentropy', optimizer=sgd)
+    #model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    sgd = SGD(lr=0.01, momentum=0.9, nesterov=True)
+    model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
 
-def concurrent_local_iterator(rdd, concurrency=4):
+def concurrent_local_iterator(rdd, concurrency=16):
     partition_count = rdd.getNumPartitions()
     for start_partition in range(0, partition_count, concurrency):
         end_partition = min(partition_count, start_partition + concurrency)
@@ -94,12 +104,12 @@ def concurrent_local_iterator(rdd, concurrency=4):
             yield row
 
 
-def sample_iterator(df, batch_size=8196):
+def sample_iterator(df, batch_size=1024*8):
     ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
     :param df: dataframe to sample
-    :param batch_size: Number of sample in each yielded batch
+    :param batch_size: Number of samples in each yielded batch
     '''
-    sample_fraction = 0.1  # Mostly used to keep some randomness while still retaining big enough batches
+    sample_fraction = 0.05  # Mostly used to keep some randomness while still retaining big enough batches
     X = None
     Y = None
     while True:
@@ -114,7 +124,7 @@ def sample_iterator(df, batch_size=8196):
                 X = np.vstack([X, x])
                 Y = np.vstack([Y, y])
             if X.shape[0] > batch_size:
-                yield X, Y
+                yield X, Y, Y.dot(weights)
                 X = None
                 Y = None
 
@@ -139,6 +149,21 @@ class WriteLosses(Callback):
         self.f.close()
 
 
+class ConfusionMatrix(Callback):
+    def __init__(self, validation_data):
+        super(ConfusionMatrix, self).__init__()
+        self.validation_data = validation_data
+
+    def print_confusion_matrix(self):
+        res = np.argmax(self.model.predict(self.validation_data[0]), 1)
+        labels = np.argmax(self.validation_data[1], 1)
+        print '\nConfusion matrix:'
+        print confusion_matrix(res, labels)
+
+    def on_epoch_begin(self, batch, logs={}):
+        self.print_confusion_matrix()
+
+
 def main():
     conf = SparkConf().set("spark.sql.shuffle.partitions", "4096") \
         .set("spark.python.worker.memory", "2g") \
@@ -154,8 +179,7 @@ def main():
 
     save_callback = ModelCheckpoint(filepath=model_save_path, save_best_only=True)
     log_callback = WriteLosses(filepath=log_path)
-    #    combinedDF = sqlContext.read.parquet(
-    #        '/home/jenia/Deep/combined/part-r-00000-fea4cef7-4875-49b0-a9db-4904a007a852.gz.parquet')
+
 
     model = make_model()
     if os.path.isfile(model_save_path):
@@ -163,19 +187,18 @@ def main():
         model.load_weights(model_save_path)
 
     test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
-    validation_data = sample_iterator(test_combined_df, batch_size=1024 * 16).next()
+    validation_data = sample_iterator(test_combined_df, batch_size=1024 * 64).next()
     print 'Loaded validation data'
-    res = np.argmax(model.predict(validation_data[0]), 1)
-    labels = np.argmax(validation_data[1], 1)
-    print confusion_matrix(res, labels)
+    confusion_callback = ConfusionMatrix(validation_data=validation_data)
+
 
     training_generator = sample_iterator(combined_df)
     model.fit_generator(training_generator,
                         samples_per_epoch=samples_per_epoch,
-                        nb_epoch=200,
+                        nb_epoch=1024,
                         show_accuracy=True,
                         nb_worker=2,
-                        callbacks=[save_callback, log_callback],
+                        callbacks=[save_callback, log_callback, confusion_callback],
                         validation_data=validation_data
                         )
 

@@ -22,8 +22,6 @@ object PrepareData {
   val minParamCount = 10000
   val minDomainCount = 0
   val maxUserPageCount = 400
-  val maxVisitPageCount = 50
-  val minVisitPageCount = 3
   val minWord2VecCount = 5
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
@@ -72,7 +70,6 @@ object PrepareData {
     val visitsData = sqlContext.read.json(visitsPath)
     val visits = visitsData
       .filter(visitsData("site").endsWith("*"))
-      .filter(s"size(timestamps)<=$maxVisitPageCount and size(timestamps)>=$minVisitPageCount")
       .withColumn("visitId", monotonicallyIncreasingId)
       .select("user", "timestamps", "visitId", "sendingpage", "landingpage", "specialref")
 
@@ -118,7 +115,7 @@ object PrepareData {
     System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
     System.setProperty("spark.driver.memory", "22g")
-
+    System.setProperty("spark.memory.storageFraction", "0.1")
     System.setProperty("spark.sql.shuffle.partitions", "512")
 
     val blockSize: Int = 1 * 1024 * 1024
