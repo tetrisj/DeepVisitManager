@@ -30,7 +30,6 @@ object Features {
   @transient private var _f2jBLAS: NetlibBLAS = _
   @transient private var _nativeBLAS: NetlibBLAS = _
 
-  // For level-1 routines, we use Java implementation.
   private def f2jBLAS: NetlibBLAS = {
     if (_f2jBLAS == null) {
       _f2jBLAS = new F2jBLAS
@@ -141,10 +140,10 @@ object Features {
   zeroVector.clone()
 
 
-  def urlFeatures(u: String, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]]) = {
+  def urlFeatures(u: String, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]], domainIdMap:Map[String,Int]) = {
     val sentenceVecs = new UrlVectorsIterator(u, urlModelMap)
     var featureCount = 0
-    val urlVector = Array.fill[Float](200)(0.0f)
+    val urlVector = Array.fill[Float](201)(0.0f)
     sentenceVecs.foreach { v =>
       axpy(1.0f, v, urlVector)
       featureCount+=1
@@ -153,20 +152,20 @@ object Features {
       val scaleFactor = 1.0f/nUrlFeatures
       scal(scaleFactor, urlVector)
     }
-    domainModelMap.get(domain(u)) match {
-      case Some(v) => Array.copy(v,0,urlVector,100,100)
-      case _ => None
-    }
+    val d = domain(u)
+    val domainVector = domainModelMap.getOrElse(d, domainModelMap.get(noDomainString).get)
+    Array.copy(domainVector,0,urlVector,100,100)
+    urlVector.update(200, domainIdMap.getOrElse(d,-1).toFloat)
     urlVector
   }
 
 
-  def eventFeatures(e: Data.RawEvent, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]]) = {
+  def eventFeatures(e: Data.RawEvent, urlModelMap: mutable.Map[String, Array[Float]], domainModelMap: mutable.Map[String, Array[Float]], domainIdMap:Map[String,Int]) = {
     // [request features][href features][prev features][timestamp]
     val feature = EventFeature(
-      urlFeatures(e.requestUrl, urlModelMap,domainModelMap),
-      urlFeatures(e.referrerUrl, urlModelMap,domainModelMap),
-      urlFeatures(e.prevUrl, urlModelMap, domainModelMap),
+      urlFeatures(e.requestUrl, urlModelMap,domainModelMap, domainIdMap),
+      urlFeatures(e.referrerUrl, urlModelMap,domainModelMap, domainIdMap),
+      urlFeatures(e.prevUrl, urlModelMap, domainModelMap, domainIdMap),
       e.timestamp
     )
 

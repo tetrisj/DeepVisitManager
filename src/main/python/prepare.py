@@ -1,5 +1,5 @@
 import numpy as np
-from keras.layers.core import Activation
+from keras.layers.core import Activation, Dense
 from keras.optimizers import SGD
 from keras.layers.recurrent import LSTM
 from keras.models import Sequential
@@ -15,10 +15,10 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # Move to global config
-n_desc = 3 * 200 + 1
-max_t = 4
+n_desc = 3 * 201 + 1
+max_t =
 states = ('open', 'moved', 'moved_from_me')
-weights = np.array([5, 1., 100.]) # Relative importance of each type of labeled sample, based on weight
+weights = np.array([10, 1., 10.]) # Relative importance of each type of labeled sample, based on weight
 
 
 # states = ('open', 'moved')
@@ -31,7 +31,7 @@ def event_features(event, start_time):
 
 
 def learning_set(combined):
-    ''' Creates data of shape n_samples, max_t, n_desc and labels of shape n_smaples
+    ''' Creates data of shape n_samples, max_t, n_desc and labels of shape n_samples
         Each sample contains all valid events in the visit up to that point and then the tested event
         The label is the decision for that combination of events
         The idea is to simulate a state machine that decides whether a new event belongs to the visit
@@ -73,28 +73,21 @@ def learning_set(combined):
 
 def make_model():
     model = Sequential()
-    r = l2(0.01)
-    model.add(LSTM(512, return_sequences=True,
+    r = l2(0.001)
+    model.add(LSTM(1536, return_sequences=False,
                    W_regularizer=r,
                    U_regularizer=r,
                    input_shape=(max_t, n_desc)))
-    model.add(LSTM(512, return_sequences=True,
-                   W_regularizer=r,
-                   U_regularizer=r,
-                   input_shape=(max_t, n_desc)))
-    model.add(LSTM(len(states),
-                   W_regularizer=r,
-                   U_regularizer=r,
-                   return_sequences=False))
+    model.add(Dense(len(states)))
     model.add(Activation('softmax'))
 
     #model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
-    sgd = SGD(lr=0.01, momentum=0.9, nesterov=True)
+    sgd = SGD(lr=0.001, momentum=0.9, nesterov=True)
     model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
 
-def concurrent_local_iterator(rdd, concurrency=16):
+def concurrent_local_iterator(rdd, concurrency=8):
     partition_count = rdd.getNumPartitions()
     for start_partition in range(0, partition_count, concurrency):
         end_partition = min(partition_count, start_partition + concurrency)
@@ -104,7 +97,7 @@ def concurrent_local_iterator(rdd, concurrency=16):
             yield row
 
 
-def sample_iterator(df, batch_size=1024*8):
+def sample_iterator(df, batch_size=1024):
     ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
     :param df: dataframe to sample
     :param batch_size: Number of samples in each yielded batch

@@ -1,13 +1,13 @@
 package com.tetrisj
 
-import com.tetrisj.Data.{UserVisitConnections, VisitConnection, RawUserEvents}
+import com.tetrisj.Data.{RawUserEvents, UserVisitConnections, VisitConnection}
 import org.apache.hadoop.io.Text
 import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.functions.{monotonicallyIncreasingId}
+import org.apache.spark.sql.functions.monotonicallyIncreasingId
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.functions.{udf, rand}
-
+import org.apache.spark.sql.functions.{rand, udf}
+import com.tetrisj.Features
 
 import scala.collection.mutable
 
@@ -19,9 +19,7 @@ object PrepareData {
   val eventsPath = "/home/jenia/Deep/events/"
   val visitsPath = "/home/jenia/Deep/visits/"
   val outputRoot = "/home/jenia/Deep"
-  val minParamCount = 10000
-  val minDomainCount = 0
-  val maxUserPageCount = 400
+  val maxUserPageCount = 500
   val minWord2VecCount = 5
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
@@ -29,9 +27,9 @@ object PrepareData {
     val rawUserEventsRDD = sc.sequenceFile[Text, Text](eventsPath, 16).map { t =>
       RawUserEvents(t._1.toString,
         t._2.toString.split('\n').map(Data.RawEvent.fromString))
-    }.filter(_.events.size < maxUserPageCount)
+    }.filter(_.events.length < maxUserPageCount)
 
-    val word2vec = new Word2Vec().setMinCount(minWord2VecCount).setNumIterations(3)
+    val word2vec = new Word2Vec().setMinCount(minWord2VecCount).setNumIterations(8)
 
     //Calculate word2vec
 //    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
@@ -48,7 +46,18 @@ object PrepareData {
 //        Features.domain(event.referrerUrl),
 //        Features.domain(event.prevUrl))
 //    }
-//    val domainModel = word2vec.fit(domains)
+    val domainSeqs = rawUserEventsRDD.map{rawEvents => rawEvents.events.map{ event => Features.domain(event.requestUrl)}.toSeq}
+    val domainCounts = domainSeqs.flatMap(x => x).countByValue()
+
+    val domainIdMap = (domainCounts.keySet + Features.noDomainString).zipWithIndex.toMap
+
+//    val goodDomainsSet = domainCounts.filter(_._2 >= minWord2VecCount).keys.toSet
+//    val filteredDomainSeqs = domainSeqs.map(ds => ds.map{ domain =>
+//      if (goodDomainsSet.contains(domain)) domain
+//      else Features.noDomainString
+//    })
+//
+//    val domainModel = word2vec.fit(filteredDomainSeqs)
 //    domainModel.save(sc,"/home/jenia/Deep/word2vec_domain_model")
 
     val urlModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_url_model")
@@ -56,9 +65,9 @@ object PrepareData {
     val urlModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ urlModel.getVectors
     val domainModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ domainModel.getVectors
 
-    val eventsRDD = rawUserEventsRDD.map { ue =>
+    val eventsRDD = rawUserEventsRDD.sample(true, 0.3).map { ue =>
       Data.UserEvents(ue.userId,
-        ue.events.map(e => Features.eventFeatures(e, urlModelVectors, domainModelVectors)))
+        ue.events.map(e => Features.eventFeatures(e, urlModelVectors, domainModelVectors, domainIdMap)))
     }
 
     eventsRDD.toDF
@@ -114,9 +123,9 @@ object PrepareData {
 
     System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
-    System.setProperty("spark.driver.memory", "22g")
-    System.setProperty("spark.memory.storageFraction", "0.1")
-    System.setProperty("spark.sql.shuffle.partitions", "512")
+    System.setProperty("spark.driver.memory", "24g")
+    System.setProperty("spark.memory.storageFraction", "0.2")
+    System.setProperty("spark.sql.shuffle.partitions", "1024")
 
     val blockSize: Int = 1 * 1024 * 1024
     System.setProperty("dfs.blocksize", blockSize.toString)
