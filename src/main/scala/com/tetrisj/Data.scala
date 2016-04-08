@@ -18,15 +18,15 @@ object Data {
     def fromString(s: String) = {
       val fields = s.split('\t')
       val timestamp = fields(0).toDouble
-      val referrerUrl = fields(10)
-      val prevUrl = fields(11)
-      val requestUrl = fields(12)
+      val referrerUrl = Features.standartizeUrl(fields(10))
+      val prevUrl = Features.standartizeUrl(fields(11))
+      val requestUrl = Features.standartizeUrl(fields(12))
 
       RawEvent(timestamp, requestUrl, referrerUrl, prevUrl)
     }
   }
 
   case class UserEvents(userId: String, events: Array[EventWithFeatures])
-  case class VisitConnection(sendingPage: String, landingPage: String, landingTime: Double)
-  case class UserVisitConnections(userId: String, connections: List[VisitConnection])
+  case class Visit(sendingPage: String, landingPage: String, timestamps: List[Double], pages: List[String])
+  case class UserVisits(userId: String, visits: List[Visit])
 }

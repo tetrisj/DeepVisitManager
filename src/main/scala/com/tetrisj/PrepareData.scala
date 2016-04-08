@@ -1,13 +1,11 @@
 package com.tetrisj
 
-import com.tetrisj.Data.{RawUserEvents, UserVisitConnections, VisitConnection}
+import com.tetrisj.Data.{RawUserEvents, UserVisits, Visit}
 import org.apache.hadoop.io.Text
 import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.sql.functions.monotonicallyIncreasingId
 import org.apache.spark.{SparkConf, SparkContext}
-import org.apache.spark.sql.functions.{rand, udf}
-import com.tetrisj.Features
+import org.apache.spark.sql.functions.rand
 
 import scala.collection.mutable
 
@@ -19,7 +17,7 @@ object PrepareData {
   val eventsPath = "/home/jenia/Deep/events/"
   val visitsPath = "/home/jenia/Deep/visits/"
   val outputRoot = "/home/jenia/Deep"
-  val maxUserPageCount = 500
+  val maxUserPageCount = 300
   val minWord2VecCount = 5
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
@@ -27,45 +25,48 @@ object PrepareData {
     val rawUserEventsRDD = sc.sequenceFile[Text, Text](eventsPath, 16).map { t =>
       RawUserEvents(t._1.toString,
         t._2.toString.split('\n').map(Data.RawEvent.fromString))
-    }.filter(_.events.length < maxUserPageCount)
+    }.filter(rue => rue.events.exists(e => e.requestUrl.length < 3))
+
 
     val word2vec = new Word2Vec().setMinCount(minWord2VecCount).setNumIterations(8)
 
     //Calculate word2vec
-//    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
-//      Seq(Features.urlSeq(event.requestUrl),
-//        Features.urlSeq(event.referrerUrl),
-//        Features.urlSeq(event.prevUrl))
-//    }
-//
-//    val urlModel = word2vec.fit(allSeqs)
-//    urlModel.save(sc,"/home/jenia/Deep/word2vec_url_model")
+    val allSeqs = rawUserEventsRDD.flatMap(_.events).flatMap { event =>
+      Seq(Features.urlSeq(event.requestUrl),
+        Features.urlSeq(event.referrerUrl),
+        Features.urlSeq(event.prevUrl))
+    }
 
-//    val domains = rawUserEventsRDD.flatMap(_.events).map { event =>
-//      Seq(Features.domain(event.requestUrl),
-//        Features.domain(event.referrerUrl),
-//        Features.domain(event.prevUrl))
-//    }
-    val domainSeqs = rawUserEventsRDD.map{rawEvents => rawEvents.events.map{ event => Features.domain(event.requestUrl)}.toSeq}
+    //val urlModel = word2vec.fit(allSeqs)
+    //urlModel.save(sc,"/home/jenia/Deep/word2vec_url_model")
+
+    val domains = rawUserEventsRDD.flatMap(_.events).map { event =>
+      Seq(Features.domain(event.requestUrl),
+        Features.domain(event.referrerUrl),
+        Features.domain(event.prevUrl))
+    }
+    val domainSeqs = rawUserEventsRDD.map { rawEvents => rawEvents.events.map { event => Features.domain(event.requestUrl) }.toSeq }
     val domainCounts = domainSeqs.flatMap(x => x).countByValue()
 
     val domainIdMap = (domainCounts.keySet + Features.noDomainString).zipWithIndex.toMap
 
-//    val goodDomainsSet = domainCounts.filter(_._2 >= minWord2VecCount).keys.toSet
-//    val filteredDomainSeqs = domainSeqs.map(ds => ds.map{ domain =>
-//      if (goodDomainsSet.contains(domain)) domain
-//      else Features.noDomainString
-//    })
-//
+    val goodDomainsSet = domainCounts.filter(_._2 >= minWord2VecCount).keys.toSet
+    val filteredDomainSeqs = domainSeqs.map(ds => ds.map{ domain =>
+      if (goodDomainsSet.contains(domain)) domain
+      else Features.noDomainString
+    })
+
 //    val domainModel = word2vec.fit(filteredDomainSeqs)
 //    domainModel.save(sc,"/home/jenia/Deep/word2vec_domain_model")
 
+
+    //Alternatively - load model from files
     val urlModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_url_model")
     val domainModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_domain_model")
     val urlModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ urlModel.getVectors
     val domainModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ domainModel.getVectors
 
-    val eventsRDD = rawUserEventsRDD.sample(true, 0.3).map { ue =>
+    val eventsRDD = rawUserEventsRDD.filter(_.events.length < maxUserPageCount).sample(true, 0.3).map { ue =>
       Data.UserEvents(ue.userId,
         ue.events.map(e => Features.eventFeatures(e, urlModelVectors, domainModelVectors, domainIdMap)))
     }
@@ -74,49 +75,41 @@ object PrepareData {
 
   }
 
-  def prepareVisits()(implicit sc: SparkContext, sqlContext: SQLContext) = {
 
+  def prepareVisits()(implicit sc: SparkContext, sqlContext: SQLContext) = {
+    import sqlContext.implicits._
     val visitsData = sqlContext.read.json(visitsPath)
+    visitsData.printSchema()
     val visits = visitsData
       .filter(visitsData("site").endsWith("*"))
-      .withColumn("visitId", monotonicallyIncreasingId)
-      .select("user", "timestamps", "visitId", "sendingpage", "landingpage", "specialref")
+      .select("user", "timestamps", "sendingpage", "landingpage", "specialref", "pages")
+      .rdd.map { r => (r.getAs[String]("user"), Visit(r.getAs[String]("sendingpage"),
+      r.getAs[String]("landingpage"),
+      r.getAs[mutable.WrappedArray[Long]]("timestamps").map(_ / 1000.0).toList,
+      r.getAs[mutable.WrappedArray[String]]("pages").toList
+    ))
+    }
+      .groupByKey()
+      .map(t => UserVisits(t._1, t._2.toList))
+      .toDF
 
     visits
-
   }
 
 
   def combineVistsAndEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
-    import sqlContext.implicits._
+
 
     val events = prepareEvents()
-    events.registerTempTable("events")
-
     val visits = prepareVisits()
-    visits.registerTempTable("visits")
+    visits.printSchema()
+    visits.show()
+    val combined = events
+      .join(visits, events("userId") === visits("userId"))
+      .select("events","visits")
+    combined.printSchema()
+    combined
 
-    val minTimestamp = udf { timestamps: mutable.WrappedArray[Long] => timestamps.min / 1000.0 }
-
-    val visitConnections = visits
-      .withColumn("landing_time", minTimestamp(visits("timestamps")))
-      .filter("not isnull(sendingpage) and specialref!=5")
-      .select("user", "sendingpage", "landingpage", "landing_time")
-
-      .rdd.map { r => (r.getAs[String]("user"), VisitConnection(r.getAs[String]("sendingpage"), r.getAs[String]("landingpage"), r.getAs[Double]("landing_time"))) }
-      .groupByKey()
-      .map(t => UserVisitConnections(t._1, t._2.toList))
-      .toDF
-
-
-
-    val combined = visits
-      .join(events, events("userId") === visits("user"))
-    val combinedWithTransfers = combined
-      .join(visitConnections, "userId")
-      .select("timestamps", "events", "connections")
-
-    combinedWithTransfers
   }
 
   def main(args: Array[String]): Unit = {
@@ -125,7 +118,7 @@ object PrepareData {
     System.setProperty("spark.app.name", "DeepVisit")
     System.setProperty("spark.driver.memory", "24g")
     System.setProperty("spark.memory.storageFraction", "0.2")
-    System.setProperty("spark.sql.shuffle.partitions", "1024")
+    System.setProperty("spark.sql.shuffle.partitions", "512")
 
     val blockSize: Int = 1 * 1024 * 1024
     System.setProperty("dfs.blocksize", blockSize.toString)
@@ -140,7 +133,7 @@ object PrepareData {
     //Logger.getLogger("org.apache.spark").setLevel(Level.INFO)
     val combined = combineVistsAndEvents().withColumn("rand", rand())
     //Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
-
+    combined.toJSON.take(1).foreach(println)
 
     combined
       .filter(combined("rand") > 0.1)

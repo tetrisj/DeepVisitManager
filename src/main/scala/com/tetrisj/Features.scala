@@ -1,17 +1,8 @@
 package com.tetrisj
 
-import java.nio.charset.Charset
-
-import com.github.fommil.netlib.{F2jBLAS, BLAS}
-import com.google.common.net.InternetDomainName
-import com.tetrisj.Data.EventFeature
-import org.apache.commons.httpclient.URI
-
-import org.apache.http.client.utils.URLEncodedUtils
 import com.github.fommil.netlib.BLAS.{getInstance => blas}
-import com.github.fommil.netlib.{BLAS => NetlibBLAS, F2jBLAS}
-import org.apache.spark.mllib.linalg.{SparseVector, Vector, DenseVector, Vectors}
-import org.scalatest.path
+import com.github.fommil.netlib.{F2jBLAS, BLAS => NetlibBLAS}
+import com.tetrisj.Data.EventFeature
 
 import scala.collection.mutable
 
@@ -21,8 +12,6 @@ import scala.collection.mutable
   */
 
 object Features {
-
-  import collection.JavaConversions._
 
   val seed = 123891273
   val nUrlFeatures = 10
@@ -37,11 +26,18 @@ object Features {
     _f2jBLAS
   }
 
+  def standartizeUrl(url:String) = {
+    try {
+      new UrlZ(url).getRawUrl
+    }catch {
+      case e: Exception => ""
+    }
+  }
 
   def domain(u: String) = {
     try {
-      val url = new URI(u, false)
-      val domain = url.getHost
+      val url = new UrlZ(u)
+      val domain = url.getFirstLevelDomain
       domain
     } catch {
       case e: Exception => noDomainString
@@ -50,10 +46,10 @@ object Features {
 
   def urlSeq(u:String) = {
     try {
-    val url = new URI(u, false)
-    val domain = url.getHost
-    val path = url.getPath.split('/')
-    val params = URLEncodedUtils.parse(url.getQuery, Charset.forName("UTF-8")).map(_.getName).toArray
+    val url = new UrlZ(u)
+    val domain = url.getFirstLevelDomain
+    val path = url.getPath.split("/")
+    val params = url.getQueryParams.map(_.split('=')(0))
     val res = (domain +: path ++: params).toList
     res
     }catch {
@@ -64,14 +60,14 @@ object Features {
   //Iterator directly for vectors for speed and to avoid generating long sequences in memory
   class UrlVectorsIterator(val u: String, model: mutable.Map[String, Array[Float]]) extends Iterator[Array[Float]] {
     var i = 0
-    var _url: URI = null
+    var _url: UrlZ = null
     var _path: Array[String] = null
-    var _params: scala.collection.mutable.Buffer[String] = null
+    var _params: Array[String] = null
 
     def url() = {
       if (_url == null)
         try {
-          _url = new URI(u, false)
+          _url = new UrlZ(u)
         }catch {
           case e: Exception => null
         }
@@ -80,7 +76,7 @@ object Features {
 
     def hostVector: Array[Float] = {
       if (url == null) zeroVector
-      else model.getOrElse(url.getHost, zeroVector)
+      else model.getOrElse(url.getFirstLevelDomain, zeroVector)
     }
 
     def path = {
@@ -96,13 +92,13 @@ object Features {
 
     def params = {
       if (_params == null)
-        _params = URLEncodedUtils.parse(url.getQuery, Charset.forName("UTF-8")).map(_.getName)
+        _params = url.getQueryParams.map(_.split("=")(0))
       _params
     }
 
     def paramsVector(i: Int) = {
       if (url == null) zeroVector
-      else model.getOrElse(params(i - 1 - path.size), zeroVector)
+      else model.getOrElse(params(i - 1 - path.length), zeroVector)
     }
 
     @inline override def hasNext: Boolean = i < nUrlFeatures
@@ -111,7 +107,7 @@ object Features {
       try {
         if (url ==null) zeroVector
         else if (i == 0) hostVector
-        else if (i - 1 < path.size) pathVector(i)
+        else if (i - 1 < path.length) pathVector(i)
         else paramsVector(i)
       } catch {
         case e: Exception => zeroVector
@@ -125,7 +121,7 @@ object Features {
     * y += a * x
     */
   @inline private def axpy(a: Float, x: Array[Float], y: Array[Float]): Unit = {
-    val n = x.size
+    val n = x.length
     f2jBLAS.saxpy(n, a, x, 1, y, 1)
   }
 

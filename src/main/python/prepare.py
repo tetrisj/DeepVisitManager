@@ -9,16 +9,20 @@ from keras.regularizers import l2
 from scipy import sparse
 from sklearn.metrics import confusion_matrix
 import os
+from keras.datasets import imdb
+from keras.preprocessing import sequence
+from keras.utils.np_utils import to_categorical
 
 import warnings
 
 warnings.filterwarnings("ignore")
-
 # Move to global config
-n_desc = 3 * 201 + 1
-max_t =
-states = ('open', 'moved', 'moved_from_me')
-weights = np.array([10, 1., 10.]) # Relative importance of each type of labeled sample, based on weight
+n_desc = 3 * 201 + 2
+max_visits_count = 16
+max_t = 32
+states = ('open', 'moved')
+start_vector = np.ones((max_t - 1, n_desc)) * -1  # Indicates start of sequence (since we are using stateful RNNs)
+batch_size = 128
 
 
 # states = ('open', 'moved')
@@ -26,7 +30,7 @@ weights = np.array([10, 1., 10.]) # Relative importance of each type of labeled 
 
 def event_features(event, start_time):
     feature = np.array([event.feature.requestVec, event.feature.hrefVec, event.feature.prevVec]).reshape(
-        (1, n_desc - 1))
+        (1, n_desc - 2))
     return np.append(feature, event.event.timestamp - start_time)
 
 
@@ -38,56 +42,61 @@ def learning_set(combined):
     '''
 
     events = sorted(combined.events, key=lambda e: e.event.timestamp)
-    visit_timestamps = np.array(sorted(combined.timestamps)) / 1000.0
-    start_time = visit_timestamps.min()
-    landing_timestamps = dict([(timestamp, (s, l)) for s, l, timestamp in combined.connections])
-    event_timestamps = np.array(
-        [event.event.timestamp for event in events if event.event.timestamp > start_time - 0.01])
+    visits = sorted(combined.visits, key=lambda v: v.timestamps[0])
+    if len(visits) > max_visits_count:
+        return None, None
+    n_samples = len(events)
+    event_timestamps = np.array([event.event.timestamp for event in events])
+    start_time = event_timestamps.min()
+    labels = np.zeros(n_samples)
+    # Calculate labels
+    for i, visit in enumerate(visits):
+        intersect = np.in1d(event_timestamps,
+                            np.array(visit.timestamps))  # Events with matching timestamps get a 1 label
+        labels[intersect.nonzero()[0]] = i + 1
 
-    # Match events to visit timestamps
+    # Remove events not caught by any visit
+    good_labels = labels[labels.nonzero()]
+    # If there is a visit without matching events - skip
+    if not np.array_equal(np.unique(good_labels), np.array(range(1, len(combined.visits) + 1))):
+        return None, None
 
-    intersect = np.in1d(event_timestamps, visit_timestamps) * 1  # Events with matching timestamps get a 1 label
-    true_indices = intersect.nonzero()[0]
-    n_samples = len(intersect)
+    X = np.vstack([event_features(event, start_time) for event in events])
+    X = X[labels.nonzero()]
 
-    # Calculate labels (dimension per label). transition labels would be added later
-    # mine | not mine | moved from me
-    Y = np.array([intersect, 1 - intersect, np.zeros(n_samples)]).T
-    event_data = np.vstack([event_features(event, start_time) for event in events if
-                            event.event.timestamp > start_time - 0.01])
+    # Add labels to all features (the last one will be removed later after we make windows)
+    X = np.hstack([X, good_labels.reshape((good_labels.shape[0], 1))])
+    X = np.vstack([start_vector, X])
 
-    X = np.zeros((n_samples, max_t, n_desc))
-    # TODO: use something more efficient than iterations
-    for i in range(n_samples):
-        X[i][max_t - 1] = event_data[i]
-        true_for_i = [idx for idx in true_indices if idx < i][-max_t + 1:]
-        if true_for_i:
-            X[i][max_t - 1 - len(true_for_i): max_t - 1] = event_data[true_for_i]
-            # Set labels for connection if nessecary
-            if event_timestamps[i] in landing_timestamps:
-                sending, landing = landing_timestamps[event_timestamps[i]]
-                if landing in events[i].event.requestUrl and sending in events[true_for_i[-1]].event.requestUrl:
-                    Y[i] = np.array([0, 0, 1])  # Transition
+    # Make train predictions
+    Y = to_categorical(good_labels - 1, max_visits_count)  # indicator matrix with labels starting at 0
+
+    # Create learning set windows
+    X = X.reshape((1, X.shape[0], n_desc))
+    X = np.vstack([X[:, i:i + max_t] for i in range(X.shape[1] - max_t + 1)])
+
+    # Remove last label (because this is what we want to predict)
+    X[:, -1, -1] = -1
+
     return X, Y
 
 
 def make_model():
     model = Sequential()
-    r = l2(0.001)
-    model.add(LSTM(1536, return_sequences=False,
-                   W_regularizer=r,
-                   U_regularizer=r,
+    model.add(LSTM(256, return_sequences=True,
                    input_shape=(max_t, n_desc)))
-    model.add(Dense(len(states)))
+    model.add(LSTM(128, return_sequences=False,
+                   input_shape=(max_t, n_desc)))
+    model.add(Dense(max_visits_count))
     model.add(Activation('softmax'))
 
-    #model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
-    sgd = SGD(lr=0.001, momentum=0.9, nesterov=True)
-    model.compile(loss='categorical_crossentropy', optimizer=sgd)
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    # sgd = SGD(lr=0.001, momentum=0.9, nesterov=True)
+    # model.compile(loss='categorical_crossentropy', optimizer=sgd)
     return model
 
 
-def concurrent_local_iterator(rdd, concurrency=8):
+def concurrent_local_iterator(rdd, concurrency=32):
     partition_count = rdd.getNumPartitions()
     for start_partition in range(0, partition_count, concurrency):
         end_partition = min(partition_count, start_partition + concurrency)
@@ -97,19 +106,19 @@ def concurrent_local_iterator(rdd, concurrency=8):
             yield row
 
 
-def sample_iterator(df, batch_size=1024):
+def sample_iterator(df, sample_fraction=0.5, batch_size=3 * 1024):
     ''' Repatedly sample from dataframe then iterate over partitions, finally yeilding fixed size batches
     :param df: dataframe to sample
     :param batch_size: Number of samples in each yielded batch
     '''
-    sample_fraction = 0.05  # Mostly used to keep some randomness while still retaining big enough batches
     X = None
     Y = None
     while True:
         samples_rdd = df.sample(fraction=sample_fraction, withReplacement=True).map(learning_set)
         samples_iterator = concurrent_local_iterator(samples_rdd)
         for x, y in samples_iterator:
-
+            if x is None:
+                continue
             if X is None:
                 X = x
                 Y = y
@@ -117,7 +126,7 @@ def sample_iterator(df, batch_size=1024):
                 X = np.vstack([X, x])
                 Y = np.vstack([Y, y])
             if X.shape[0] > batch_size:
-                yield X, Y, Y.dot(weights)
+                yield X, Y
                 X = None
                 Y = None
 
@@ -170,9 +179,8 @@ def main():
     combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_train/')
     samples_per_epoch = 1024 * 128
 
-    save_callback = ModelCheckpoint(filepath=model_save_path, save_best_only=True)
+    save_callback = ModelCheckpoint(filepath=model_save_path, save_best_only=False)
     log_callback = WriteLosses(filepath=log_path)
-
 
     model = make_model()
     if os.path.isfile(model_save_path):
@@ -180,10 +188,9 @@ def main():
         model.load_weights(model_save_path)
 
     test_combined_df = sqlContext.read.parquet('/home/jenia/Deep/combined_test/')
-    validation_data = sample_iterator(test_combined_df, batch_size=1024 * 64).next()
+    validation_data = sample_iterator(test_combined_df, sample_fraction=0.5, batch_size=8 * 1024).next()
     print 'Loaded validation data'
     confusion_callback = ConfusionMatrix(validation_data=validation_data)
-
 
     training_generator = sample_iterator(combined_df)
     model.fit_generator(training_generator,
