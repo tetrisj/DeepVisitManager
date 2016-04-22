@@ -34,7 +34,7 @@ def event_features(event, start_time):
     return np.append(feature, event.event.timestamp - start_time)
 
 
-def learning_set(combined):
+def learning_set_visits(combined):
     ''' Creates data of shape n_samples, max_t, n_desc and labels of shape n_samples
         Each sample contains all valid events in the visit up to that point and then the tested event
         The label is the decision for that combination of events
@@ -70,6 +70,67 @@ def learning_set(combined):
 
     # Make train predictions
     Y = to_categorical(good_labels - 1, max_visits_count)  # indicator matrix with labels starting at 0
+
+    # Create learning set windows
+    X = X.reshape((1, X.shape[0], n_desc))
+    X = np.vstack([X[:, i:i + max_t] for i in range(X.shape[1] - max_t + 1)])
+
+    # Remove last label (because this is what we want to predict)
+    X[:, -1, -1] = -1
+
+    return X, Y
+
+
+def learning_set(combined):
+    ''' Creates data of shape n_samples, max_t, n_desc and labels of shape n_samples
+        Each sample contains all valid events in the visit up to that point and then the tested event
+        The label is the decision for that combination of events
+        The idea is to simulate a state machine that decides whether a new event belongs to the visit
+    '''
+
+    events = sorted(combined.events, key=lambda e: e.event.timestamp)
+    visits = sorted(combined.visits, key=lambda v: v.timestamps[0])
+    if len(visits) > max_visits_count:
+        return None, None
+    n_samples = len(events)
+    event_timestamps = np.array([event.event.timestamp for event in events])
+    start_time = event_timestamps.min()
+    labels = np.zeros(n_samples)
+    # Calculate labels
+    for i, visit in enumerate(visits):
+        intersect = np.in1d(event_timestamps,
+                            np.array(visit.timestamps))  # Events with matching timestamps get a 1 label
+        labels[intersect.nonzero()[0]] = i + 1
+
+    # Remove events not caught by any visit
+    good_labels = labels[labels.nonzero()]
+    # If there is a visit without matching events - skip
+    if not np.array_equal(np.unique(good_labels), np.array(range(1, len(combined.visits) + 1))):
+        return None, None
+
+    X = np.vstack([event_features(event, start_time) for event in events])
+    X = X[labels.nonzero()]
+
+    # Add labels to all features (the last one will be removed later after we make windows)
+    X = np.hstack([X, good_labels.reshape((good_labels.shape[0], 1))])
+    X = np.vstack([start_vector, X])
+
+    # Find visit transfers. 0 means direct and is default and the last visit can't be sending
+    sending_map = np.zeros(len(visits))
+    for i, visit in enumerate(visits):
+        if not visit.sendingPage:
+            continue
+        landing_time = visit.timestamps[0]
+        for j, other_visit in enumerate(visits):
+            if j >= i:
+                continue
+            candidate_pages = (p for t, p in zip(other_visit.timestamps, other_visit.pages) if t < landing_time)
+            if visit.sendingPage in candidate_pages:
+                sending_map[i] = j + 1
+
+    # Make train predictions
+    Y = to_categorical(sending_map[(good_labels - 1).astype(int)],
+                       max_visits_count)  # indicator matrix with labels starting at 0
 
     # Create learning set windows
     X = X.reshape((1, X.shape[0], n_desc))
@@ -172,7 +233,7 @@ def main():
         .set("spark.memory.storageFraction", "0.1") \
         .set("spark.ui.showConsoleProgress", "false")
 
-    model_save_path = '/home/jenia/Deep/visit.h5'
+    model_save_path = '/home/jenia/Deep/transfer.h5'
     log_path = '/home/jenia/Deep/train.log'
     sc = SparkContext(conf=conf)
     sqlContext = SQLContext(sc)
