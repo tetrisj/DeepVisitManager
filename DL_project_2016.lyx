@@ -515,7 +515,7 @@ Features
 
 \begin_layout Standard
 \begin_inset Tabular
-<lyxtabular version="3" rows="5" columns="3">
+<lyxtabular version="3" rows="7" columns="3">
 <features rotate="0" tabularvalignment="middle">
 <column alignment="center" valignment="top">
 <column alignment="center" valignment="top">
@@ -592,7 +592,7 @@ A single integer mapping 1-1 to each first level domain (i.e cnn.com)
 \begin_inset Text
 
 \begin_layout Plain Layout
-Domain Vector
+Domain Vector for requested
 \end_layout
 
 \end_inset
@@ -621,7 +621,65 @@ Embedding from Word2Vec model as described above
 \begin_inset Text
 
 \begin_layout Plain Layout
-URL Vector
+URL Vector request
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Embedding from Word2Vec model as described above
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+4
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Domain Vector for referrer
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Embedding from Word2Vec model as described above
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+5
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+URL Vector referrer
 \end_layout
 
 \end_inset
@@ -641,7 +699,7 @@ Embedding from Word2Vec model as described above
 \begin_inset Text
 
 \begin_layout Plain Layout
-4
+6
 \end_layout
 
 \end_inset
@@ -676,12 +734,294 @@ The request time with sub-millisecond accuracy
 A visit based approach
 \end_layout
 
+\begin_layout Subsubsection*
+Learning
+\end_layout
+
+\begin_layout Standard
+In the visit based approach we try, given a visit containing events 
+\begin_inset Formula $v_{1},\ldots,v_{k}$
+\end_inset
+
+ and a candidate event 
+\begin_inset Formula $c$
+\end_inset
+
+, to classify 
+\begin_inset Formula $c$
+\end_inset
+
+ with on of the labels:
+\end_layout
+
+\begin_layout Standard
+\begin_inset Tabular
+<lyxtabular version="3" rows="4" columns="2">
+<features rotate="0" tabularvalignment="middle">
+<column alignment="center" valignment="top">
+<column alignment="center" valignment="top">
+<row>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+#
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Field Name
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+0
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Belongs to this visit
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+1
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Belongs to another visit
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+2
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Belongs to another visit, and this visit is referring to it
+\end_layout
+
+\end_inset
+</cell>
+</row>
+</lyxtabular>
+
+\end_inset
+
+
+\end_layout
+
+\begin_layout Standard
+A single RNN model (see __) was trained to accomplish this
+\end_layout
+
+\begin_layout Subsubsection*
+Prediction
+\end_layout
+
+\begin_layout Standard
+The prediction algorithm using this model is a simple voting models between
+ visits.
+\end_layout
+
 \begin_layout Subsection*
 A multi-visit detection approch
 \end_layout
 
+\begin_layout Standard
+In the multi visit detection approach, we train two models.
+ The first model, given a series of events 
+\begin_inset Formula $e_{1},\ldots,e_{n}$
+\end_inset
+
+ predicts a visit id 
+\begin_inset Formula $1,\ldots,k$
+\end_inset
+
+ for each event.
+ The second model predicts a referring visit id 
+\begin_inset Formula $0,\ldots,k-1$
+\end_inset
+
+ with 
+\begin_inset Formula $0$
+\end_inset
+
+ dentoting a direct visit.
+\end_layout
+
+\begin_layout Subsubsection*
+Prediction
+\end_layout
+
+\begin_layout Standard
+The prediction algorithm for visits is a simple application of the model.
+\end_layout
+
+\begin_layout Standard
+Ther prediction algorithm for referrals is an application of the model with
+ majority vote for all non-zero referrals of the visit's events.
+\end_layout
+
+\begin_layout Standard
+Two RNN models with identical topoplogy (see _) were trained.
+\end_layout
+
 \begin_layout Section*
 Results
+\end_layout
+
+\begin_layout Subsection*
+Model accuracy
+\end_layout
+
+\begin_layout Subsubsection*
+Visit based model
+\end_layout
+
+\begin_layout Subsubsection*
+Multi visit models
+\end_layout
+
+\begin_layout Subsection*
+Task accuracy
+\end_layout
+
+\begin_layout Standard
+\begin_inset Tabular
+<lyxtabular version="3" rows="3" columns="3">
+<features rotate="0" tabularvalignment="middle">
+<column alignment="center" valignment="top">
+<column alignment="center" valignment="top">
+<column alignment="center" valignment="top">
+<row>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Approach
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Event matching
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Referral matching
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Visit Based
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+
+\end_layout
+
+\end_inset
+</cell>
+</row>
+<row>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+Multi-visit
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+
+\end_layout
+
+\end_inset
+</cell>
+<cell alignment="center" valignment="top" topline="true" bottomline="true" leftline="true" rightline="true" usebox="none">
+\begin_inset Text
+
+\begin_layout Plain Layout
+
+\end_layout
+
+\end_inset
+</cell>
+</row>
+</lyxtabular>
+
+\end_inset
+
+
 \end_layout
 
 \end_body
