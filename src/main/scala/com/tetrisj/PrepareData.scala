@@ -17,7 +17,7 @@ object PrepareData {
   val eventsPath = "/home/jenia/Deep/events/"
   val visitsPath = "/home/jenia/Deep/visits/"
   val outputRoot = "/home/jenia/Deep"
-  val maxUserPageCount = 300
+  val maxUserPageCount = 800
   val minWord2VecCount = 5
 
   def prepareEvents()(implicit sc: SparkContext, sqlContext: SQLContext) = {
@@ -66,7 +66,7 @@ object PrepareData {
     val urlModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ urlModel.getVectors
     val domainModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ domainModel.getVectors
 
-    val eventsRDD = rawUserEventsRDD.filter(_.events.length < maxUserPageCount).sample(true, 0.3).map { ue =>
+    val eventsRDD = rawUserEventsRDD.filter(_.events.length < maxUserPageCount).map { ue =>
       Data.UserEvents(ue.userId,
         ue.events.map(e => Features.eventFeatures(e, urlModelVectors, domainModelVectors, domainIdMap)))
     }
@@ -116,9 +116,9 @@ object PrepareData {
 
     System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
-    System.setProperty("spark.driver.memory", "24g")
+    System.setProperty("spark.driver.memory", "20g")
     System.setProperty("spark.memory.storageFraction", "0.2")
-    System.setProperty("spark.sql.shuffle.partitions", "512")
+    System.setProperty("spark.sql.shuffle.partitions", "256")
 
     val blockSize: Int = 1 * 1024 * 1024
     System.setProperty("dfs.blocksize", blockSize.toString)
@@ -136,7 +136,7 @@ object PrepareData {
     combined.toJSON.take(1).foreach(println)
 
     combined
-      .filter(combined("rand") > 0.1)
+      .filter(combined("rand") >= 0.1)
       .write
       .option("parquet.block.size", blockSize.toString)
       .option("spark.sql.parquet.compression.codec", "gzip")
