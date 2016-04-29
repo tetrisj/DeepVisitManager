@@ -1,0 +1,40 @@
+Train:
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/prepare.py \
+     --mode=multi-visit \
+     --model-path=/home/jenia/Deep/multi-visit.h5
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/prepare.py \
+    --mode=multi-transfer \
+    --model-path=/home/jenia/Deep/multi-transfer.h5
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/prepare.py \
+    --mode=visit \
+    --model-path=/home/jenia/Deep/visit.h5
+
+
+Test:
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/test.py \
+    --mode=multi-visit \
+    --model-path=/home/jenia/Deep/multi-visit.h5
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/test.py \
+    --mode=multi-transfer \
+    --model-path=/home/jenia/Deep/multi-transfer.h5
+
+./spark-submit --master='local[8]' --driver-memory=8g \
+  --py-files=/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/input.py,/home/jenia/IdeaProjects/DeepVisitManager/src/main/python/models.py \
+  /home/jenia/IdeaProjects/DeepVisitManager/src/main/python/test.py \
+    --mode=visit \
+    --model-path=/home/jenia/Deep/visit.h5
