@@ -1,4 +1,4 @@
-package com.tetrisj
+package jeniag
 
 import org.apache.spark.mllib.linalg.SparseVector
 

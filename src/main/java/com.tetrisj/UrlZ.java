@@ -1,4 +1,4 @@
-package com.tetrisj;
+package jeniag;
 
 import org.apache.commons.lang.NullArgumentException;
 import org.apache.commons.lang.StringEscapeUtils;

@@ -1,8 +1,8 @@
-package com.tetrisj
+package jeniag
 
 import com.github.fommil.netlib.BLAS.{getInstance => blas}
 import com.github.fommil.netlib.{F2jBLAS, BLAS => NetlibBLAS}
-import com.tetrisj.Data.EventFeature
+import jeniag.Data.EventFeature
 
 import scala.collection.mutable
 

@@ -1,11 +1,11 @@
-package com.tetrisj
+package jeniag
 
-import com.tetrisj.Data.{RawUserEvents, UserVisits, Visit}
+import jeniag.Data.{RawUserEvents, UserVisits, Visit}
 import org.apache.hadoop.io.Text
-import org.apache.spark.mllib.feature.{Word2Vec, Word2VecModel}
+import org.apache.spark.mllib.feature.Word2Vec
 import org.apache.spark.sql.SQLContext
-import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.sql.functions.rand
+import org.apache.spark.{SparkConf, SparkContext}
 
 import scala.collection.mutable
 
@@ -14,9 +14,9 @@ import scala.collection.mutable
   * Created by jeniag on 2/4/2016.
   */
 object PrepareData {
-  val eventsPath = "/home/jenia/Deep/events/"
-  val visitsPath = "/home/jenia/Deep/visits/"
-  val outputRoot = "/home/jenia/Deep"
+  var eventsPath = "/similargroup/data/stats-advanced/year=16/month=06/day=01/*"
+  var visitsPath = "/similargroup/data/advanced-analytics/daily/parquet-visits/year=16/month=06/day=01"
+  var outputRoot = "/user/jeniag/deep"
   val maxUserPageCount = 800
   val minWord2VecCount = 5
 
@@ -37,8 +37,8 @@ object PrepareData {
         Features.urlSeq(event.prevUrl))
     }
 
-    //val urlModel = word2vec.fit(allSeqs)
-    //urlModel.save(sc,"/home/jenia/Deep/word2vec_url_model")
+    val urlModel = word2vec.fit(allSeqs)
+    urlModel.save(sc,"/user/jeniag/deep/word2vec_url_model")
 
     val domains = rawUserEventsRDD.flatMap(_.events).map { event =>
       Seq(Features.domain(event.requestUrl),
@@ -56,13 +56,13 @@ object PrepareData {
       else Features.noDomainString
     })
 
-//    val domainModel = word2vec.fit(filteredDomainSeqs)
-//    domainModel.save(sc,"/home/jenia/Deep/word2vec_domain_model")
+    val domainModel = word2vec.fit(filteredDomainSeqs)
+    domainModel.save(sc,"/user/jeniag/deep/word2vec_domain_model")
 
 
     //Alternatively - load model from files
-    val urlModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_url_model")
-    val domainModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_domain_model")
+    //val urlModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_url_model")
+    //val domainModel = Word2VecModel.load(sc, "/home/jenia/Deep/word2vec_domain_model")
     val urlModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ urlModel.getVectors
     val domainModelVectors: mutable.Map[String, Array[Float]] = mutable.HashMap() ++ domainModel.getVectors
 
@@ -78,7 +78,7 @@ object PrepareData {
 
   def prepareVisits()(implicit sc: SparkContext, sqlContext: SQLContext) = {
     import sqlContext.implicits._
-    val visitsData = sqlContext.read.json(visitsPath)
+    val visitsData = sqlContext.read.parquet(visitsPath)
     visitsData.printSchema()
     val visits = visitsData
       .filter(visitsData("site").endsWith("*"))
@@ -113,12 +113,12 @@ object PrepareData {
   }
 
   def main(args: Array[String]): Unit = {
-
-    System.setProperty("spark.master", "local[4]")
     System.setProperty("spark.app.name", "DeepVisit")
     System.setProperty("spark.driver.memory", "20g")
     System.setProperty("spark.memory.storageFraction", "0.2")
     System.setProperty("spark.sql.shuffle.partitions", "256")
+    eventsPath = args(0)
+    visitsPath = args(1)
 
     val blockSize: Int = 1 * 1024 * 1024
     System.setProperty("dfs.blocksize", blockSize.toString)
@@ -127,9 +127,6 @@ object PrepareData {
     val conf = new SparkConf()
     implicit val sc = new SparkContext(conf)
     implicit val sqlContext = new SQLContext(sc)
-    import sqlContext.implicits._
-
-    import org.apache.log4j.{Level, Logger}
     //Logger.getLogger("org.apache.spark").setLevel(Level.INFO)
     val combined = combineVistsAndEvents().withColumn("rand", rand())
     //Logger.getLogger("org.apache.spark").setLevel(Level.WARN)
